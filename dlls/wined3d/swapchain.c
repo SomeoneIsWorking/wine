@@ -761,6 +761,11 @@ static VkFormat get_swapchain_fallback_format(VkFormat vk_format)
         case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
         case VK_FORMAT_R16G16B16A16_SFLOAT:
             return VK_FORMAT_B8G8R8A8_UNORM;
+        /* Android surfaces offer RGBA orders only; the present blit swizzles. */
+        case VK_FORMAT_B8G8R8A8_SRGB:
+            return VK_FORMAT_R8G8B8A8_SRGB;
+        case VK_FORMAT_B8G8R8A8_UNORM:
+            return VK_FORMAT_R8G8B8A8_UNORM;
         default:
             WARN("Unhandled format %#x.\n", vk_format);
             return VK_FORMAT_UNDEFINED;
@@ -924,6 +929,7 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
     struct wined3d_adapter_vk *adapter_vk;
     VkPresentModeKHR vk_present_mode;
     VkSwapchainKHR vk_swapchain;
+    VkCompositeAlphaFlagBitsKHR alpha;
     VkImageUsageFlags usage;
     VkSurfaceKHR vk_surface;
     VkBool32 supported;
@@ -1002,7 +1008,12 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
     if (!(usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) || !(usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT))
         WARN("Transfer not supported for swapchain images.\n");
 
-    if (!(surface_caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR))
+    if (surface_caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+        alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    /* Android leaves compositing to the window. */
+    else if (surface_caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+        alpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    else
     {
         FIXME("Unsupported alpha mode, %#x.\n", surface_caps.supportedCompositeAlpha);
         goto fail;
@@ -1032,7 +1043,7 @@ static HRESULT wined3d_swapchain_vk_create_vulkan_swapchain(struct wined3d_swapc
     vk_swapchain_desc.queueFamilyIndexCount = 0;
     vk_swapchain_desc.pQueueFamilyIndices = NULL;
     vk_swapchain_desc.preTransform = surface_caps.currentTransform;
-    vk_swapchain_desc.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    vk_swapchain_desc.compositeAlpha = alpha;
     vk_swapchain_desc.presentMode = vk_present_mode;
     vk_swapchain_desc.clipped = VK_TRUE;
     vk_swapchain_desc.oldSwapchain = VK_NULL_HANDLE;
