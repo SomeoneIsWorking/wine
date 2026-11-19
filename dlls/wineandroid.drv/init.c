@@ -326,6 +326,7 @@ static const struct user_driver_funcs android_drv_funcs =
     .pCreateWindowSurface = ANDROID_CreateWindowSurface,
     .pWindowPosChanged = ANDROID_WindowPosChanged,
     .pOpenGLInit = ANDROID_OpenGLInit,
+    .pVulkanInit = ANDROID_VulkanInit,
 };
 
 
@@ -347,6 +348,7 @@ static const JNINativeMethod methods[] =
 
 DECL_FUNCPTR( __android_log_print );
 DECL_FUNCPTR( ANativeWindow_fromSurface );
+DECL_FUNCPTR( ANativeWindow_acquire );
 DECL_FUNCPTR( ANativeWindow_release );
 DECL_FUNCPTR( AHardwareBuffer_describe );
 DECL_FUNCPTR( AHardwareBuffer_acquire );
@@ -361,10 +363,16 @@ DECL_FUNCPTR( ALooper_forThread );
 DECL_FUNCPTR( ALooper_addFd );
 DECL_FUNCPTR( ALooper_removeFd );
 DECL_FUNCPTR( ALooper_release );
+DECL_FUNCPTR( AImageReader_newWithUsage );
+DECL_FUNCPTR( AImageReader_getWindow );
+DECL_FUNCPTR( AImageReader_setImageListener );
+DECL_FUNCPTR( AImageReader_acquireLatestImage );
+DECL_FUNCPTR( AImageReader_delete );
+DECL_FUNCPTR( AImage_delete );
 
 static void load_android_libs(void)
 {
-    void *libandroid, *liblog;
+    void *libandroid, *liblog, *libmediandk;
 
     if (!(libandroid = dlopen( "libandroid.so", RTLD_GLOBAL )))
     {
@@ -378,8 +386,15 @@ static void load_android_libs(void)
         abort();
         return;
     }
+    if (!(libmediandk = dlopen( "libmediandk.so", RTLD_GLOBAL )))
+    {
+        ERR( "failed to load libmediandk.so: %s\n", dlerror() );
+        abort();
+        return;
+    }
     LOAD_FUNCPTR( liblog, __android_log_print );
     LOAD_FUNCPTR( libandroid, ANativeWindow_fromSurface );
+    LOAD_FUNCPTR( libandroid, ANativeWindow_acquire );
     LOAD_FUNCPTR( libandroid, ANativeWindow_release );
     LOAD_FUNCPTR( libandroid, AHardwareBuffer_describe );
     LOAD_FUNCPTR( libandroid, AHardwareBuffer_acquire );
@@ -394,6 +409,12 @@ static void load_android_libs(void)
     LOAD_FUNCPTR( libandroid, ALooper_addFd );
     LOAD_FUNCPTR( libandroid, ALooper_removeFd );
     LOAD_FUNCPTR( libandroid, ALooper_release );
+    LOAD_FUNCPTR( libmediandk, AImageReader_newWithUsage );
+    LOAD_FUNCPTR( libmediandk, AImageReader_getWindow );
+    LOAD_FUNCPTR( libmediandk, AImageReader_setImageListener );
+    LOAD_FUNCPTR( libmediandk, AImageReader_acquireLatestImage );
+    LOAD_FUNCPTR( libmediandk, AImageReader_delete );
+    LOAD_FUNCPTR( libmediandk, AImage_delete );
 }
 
 #undef DECL_FUNCPTR

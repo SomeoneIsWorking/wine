@@ -30,6 +30,7 @@
 #include <android/input.h>
 #include <android/looper.h>
 #include <android/native_window_jni.h>
+#include <media/NdkImageReader.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -47,6 +48,7 @@
 #define DECL_FUNCPTR(f) extern typeof(f) * p##f
 DECL_FUNCPTR( __android_log_print );
 DECL_FUNCPTR( ANativeWindow_fromSurface );
+DECL_FUNCPTR( ANativeWindow_acquire );
 DECL_FUNCPTR( ANativeWindow_release );
 
 #ifdef __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__
@@ -65,6 +67,12 @@ DECL_FUNCPTR( ALooper_forThread );
 DECL_FUNCPTR( ALooper_addFd );
 DECL_FUNCPTR( ALooper_removeFd );
 DECL_FUNCPTR( ALooper_release );
+DECL_FUNCPTR( AImageReader_newWithUsage );
+DECL_FUNCPTR( AImageReader_getWindow );
+DECL_FUNCPTR( AImageReader_setImageListener );
+DECL_FUNCPTR( AImageReader_acquireLatestImage );
+DECL_FUNCPTR( AImageReader_delete );
+DECL_FUNCPTR( AImage_delete );
 #endif
 
 #undef DECL_FUNCPTR
@@ -75,6 +83,7 @@ DECL_FUNCPTR( ALooper_release );
  */
 
 extern UINT ANDROID_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs );
+extern UINT ANDROID_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_driver_funcs **driver_funcs );
 
 
 /**************************************************************************
@@ -120,6 +129,7 @@ extern BOOL ANDROID_CreateWindowSurface( HWND hwnd, BOOL layered, const RECT *su
 extern void ANDROID_WindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags,
                                       const struct window_rects *new_rects, struct window_surface *surface );
 extern ANativeWindow *get_client_window( HWND hwnd );
+extern ANativeWindow *client_surface_window( struct client_surface *client );
 extern BOOL has_client_surface( HWND hwnd );
 
 extern unsigned int screen_width;

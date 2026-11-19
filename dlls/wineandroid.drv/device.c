@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -119,6 +120,7 @@ struct native_win_data
     int                         buffer_format;
     int                         swap_interval;
     int                         buffer_lru[NB_CACHED_BUFFERS];
+    AImageReader               *offscreen;  /* consumer of an opengl client until its view has a surface */
 };
 
 /* wrapper for a native window in the context of the client (non-Java) process */
@@ -394,6 +396,8 @@ static void release_native_window( struct native_win_data *data )
         data->buffer_lru[i] = -1;
     }
     memset( data->buffers, 0, sizeof(data->buffers) );
+    if (data->offscreen) pAImageReader_delete( data->offscreen );
+    data->offscreen = NULL;
 }
 
 static void free_native_win_data( struct native_win_data *data )
@@ -425,6 +429,43 @@ static struct native_win_data *create_native_win_data( HWND hwnd, BOOL opengl )
     return data;
 }
 
+static void set_native_window_parent( struct native_win_data *data, struct ANativeWindow *win )
+{
+    data->parent = win;
+    data->generation++;
+    if (data->api) win->perform( win, NATIVE_WINDOW_API_CONNECT, data->api );
+    win->perform( win, NATIVE_WINDOW_SET_BUFFERS_FORMAT, data->buffer_format );
+    win->setSwapInterval( win, data->swap_interval );
+}
+
+static void drain_offscreen( void *context, AImageReader *reader )
+{
+    AImage *image;
+
+    if (pAImageReader_acquireLatestImage( reader, &image ) == AMEDIA_OK) pAImage_delete( image );
+}
+
+/* Vulkan needs a buffer queue as soon as the client exists; the UI thread's view comes later, or
+ * never while the window is hidden, so frames go to a reader nobody shows until then. */
+static void create_offscreen_parent( struct native_win_data *data )
+{
+    AImageReader_ImageListener listener = { .context = NULL, .onImageAvailable = drain_offscreen };
+    ANativeWindow *win;
+
+    if (pAImageReader_newWithUsage( 1, 1, AIMAGE_FORMAT_PRIVATE,
+                                    AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
+                                    4, &data->offscreen ) != AMEDIA_OK)
+    {
+        LOG( ERR, "%p offscreen reader failed\n", data->hwnd );
+        data->offscreen = NULL;
+        return;
+    }
+    pAImageReader_setImageListener( data->offscreen, &listener );
+    pAImageReader_getWindow( data->offscreen, &win );
+    pANativeWindow_acquire( win );
+    set_native_window_parent( data, win );
+}
+
 /* register a native window received from the UI thread for use in ioctls */
 void register_native_window( HWND hwnd, struct ANativeWindow *win, BOOL opengl )
 {
@@ -443,11 +484,7 @@ void register_native_window( HWND hwnd, struct ANativeWindow *win, BOOL opengl )
     }
 
     release_native_window( data );
-    data->parent = win;
-    data->generation++;
-    if (data->api) win->perform( win, NATIVE_WINDOW_API_CONNECT, data->api );
-    win->perform( win, NATIVE_WINDOW_SET_BUFFERS_FORMAT, data->buffer_format );
-    win->setSwapInterval( win, data->swap_interval );
+    set_native_window_parent( data, win );
     LOG( TRACE, "%p -> %p win %p\n", hwnd, data, win );
 end:
     pthread_mutex_unlock(&dispatch_ioctl_lock);
@@ -511,6 +548,8 @@ static int createWindow_ioctl( JNIEnv* env, void *data, DWORD in_size, DWORD out
         return -ENOMEM;
 
     LOG( TRACE, "hwnd %08x opengl %u parent %08x\n", res->hdr.hwnd, res->hdr.opengl, res->parent );
+
+    if (res->hdr.opengl) create_offscreen_parent( win_data );
 
     if (!(object = load_java_method( env, &method, "createWindow", "(IZZI)V" ))) return -ENOSYS;
 
@@ -717,8 +756,44 @@ static int perform_ioctl( JNIEnv* env, void *data, DWORD in_size, DWORD out_size
     case NATIVE_WINDOW_SET_USAGE:
     case NATIVE_WINDOW_SET_BUFFERS_TRANSFORM:
     case NATIVE_WINDOW_SET_SCALING_MODE:
+    case NATIVE_WINDOW_SET_BUFFERS_STICKY_TRANSFORM:
+    case NATIVE_WINDOW_SET_BUFFERS_DATASPACE:
+    case NATIVE_WINDOW_SET_SHARED_BUFFER_MODE:
+    case NATIVE_WINDOW_SET_AUTO_REFRESH:
+    case NATIVE_WINDOW_ENABLE_FRAME_TIMESTAMPS:
+    case NATIVE_WINDOW_SET_AUTO_PREROTATION:
         ret = parent->perform( parent, res->operation, res->args[0] );
         break;
+    case NATIVE_WINDOW_SET_USAGE64:
+    case NATIVE_WINDOW_SET_DEQUEUE_TIMEOUT:
+        ret = parent->perform( parent, res->operation, (uint32_t)res->args[0] | ((int64_t)res->args[1] << 32) );
+        break;
+    case NATIVE_WINDOW_SET_SURFACE_DAMAGE:
+        /* no rectangles: the whole buffer is damaged */
+        ret = parent->perform( parent, res->operation, NULL, (size_t)0 );
+        break;
+    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:
+    case NATIVE_WINDOW_GET_NEXT_FRAME_ID:
+    case NATIVE_WINDOW_GET_CONSUMER_USAGE64:
+    {
+        uint64_t value = 0;
+        if (out_size < sizeof(*res)) return -EINVAL;
+        ret = parent->perform( parent, res->operation, &value );
+        res->args[0] = value;
+        res->args[1] = value >> 32;
+        *ret_size = sizeof(*res);
+        break;
+    }
+    case NATIVE_WINDOW_GET_WIDE_COLOR_SUPPORT:
+    case NATIVE_WINDOW_GET_HDR_SUPPORT:
+    {
+        bool value = false;
+        if (out_size < sizeof(*res)) return -EINVAL;
+        ret = parent->perform( parent, res->operation, &value );
+        res->args[0] = value;
+        *ret_size = sizeof(*res);
+        break;
+    }
     case NATIVE_WINDOW_SET_BUFFER_COUNT:
         ret = parent->perform( parent, res->operation, (size_t)res->args[0] );
         break;
@@ -1224,7 +1299,13 @@ static int perform( ANativeWindow *window, int operation, ... )
         "SET_USAGE", "CONNECT", "DISCONNECT", "SET_CROP", "SET_BUFFER_COUNT", "SET_BUFFERS_GEOMETRY",
         "SET_BUFFERS_TRANSFORM", "SET_BUFFERS_TIMESTAMP", "SET_BUFFERS_DIMENSIONS", "SET_BUFFERS_FORMAT",
         "SET_SCALING_MODE", "LOCK", "UNLOCK_AND_POST", "API_CONNECT", "API_DISCONNECT",
-        "SET_BUFFERS_USER_DIMENSIONS", "SET_POST_TRANSFORM_CROP"
+        "SET_BUFFERS_USER_DIMENSIONS", "SET_POST_TRANSFORM_CROP", "SET_BUFFERS_STICKY_TRANSFORM",
+        "SET_SIDEBAND_STREAM", "SET_BUFFERS_DATASPACE", "SET_SURFACE_DAMAGE", "SET_SHARED_BUFFER_MODE",
+        "SET_AUTO_REFRESH", "GET_REFRESH_CYCLE_DURATION", "GET_NEXT_FRAME_ID", "ENABLE_FRAME_TIMESTAMPS",
+        "GET_COMPOSITOR_TIMING", "GET_FRAME_TIMESTAMPS", "GET_WIDE_COLOR_SUPPORT", "GET_HDR_SUPPORT",
+        "SET_USAGE64", "GET_CONSUMER_USAGE64", "SET_BUFFERS_SMPTE2086_METADATA",
+        "SET_BUFFERS_CTA861_3_METADATA", "SET_BUFFERS_HDR10_PLUS_METADATA", "SET_AUTO_PREROTATION",
+        "GET_LAST_DEQUEUE_START", "SET_DEQUEUE_TIMEOUT"
     };
 
     struct native_win_wrapper *win = (struct native_win_wrapper *)window;
@@ -1245,9 +1326,50 @@ static int perform( ANativeWindow *window, int operation, ... )
     case NATIVE_WINDOW_SET_SCALING_MODE:
     case NATIVE_WINDOW_API_CONNECT:
     case NATIVE_WINDOW_API_DISCONNECT:
+    case NATIVE_WINDOW_SET_BUFFERS_STICKY_TRANSFORM:
+    case NATIVE_WINDOW_SET_BUFFERS_DATASPACE:
+    case NATIVE_WINDOW_SET_SHARED_BUFFER_MODE:
+    case NATIVE_WINDOW_SET_AUTO_REFRESH:
+    case NATIVE_WINDOW_ENABLE_FRAME_TIMESTAMPS:
+    case NATIVE_WINDOW_SET_AUTO_PREROTATION:
         perf.args[0] = va_arg( args, int );
         TRACE( "hwnd %p %s arg %d\n", win->hwnd, names[operation], perf.args[0] );
         break;
+    case NATIVE_WINDOW_SET_USAGE64:
+    case NATIVE_WINDOW_SET_DEQUEUE_TIMEOUT:
+    {
+        int64_t value = va_arg( args, int64_t );
+        perf.args[0] = value;
+        perf.args[1] = value >> 32;
+        TRACE( "hwnd %p %s arg %08x%08x\n", win->hwnd, names[operation], perf.args[1], perf.args[0] );
+        break;
+    }
+    case NATIVE_WINDOW_SET_SURFACE_DAMAGE:
+        TRACE( "hwnd %p %s\n", win->hwnd, names[operation] );
+        break;
+    case NATIVE_WINDOW_GET_REFRESH_CYCLE_DURATION:
+    case NATIVE_WINDOW_GET_NEXT_FRAME_ID:
+    case NATIVE_WINDOW_GET_CONSUMER_USAGE64:
+    {
+        uint64_t *value = va_arg( args, uint64_t * );
+        DWORD size = sizeof(perf);
+        int ret = android_ioctl( IOCTL_PERFORM, &perf, sizeof(perf), &perf, &size, NULL );
+        if (!ret) *value = (uint32_t)perf.args[0] | ((uint64_t)(uint32_t)perf.args[1] << 32);
+        va_end( args );
+        TRACE( "hwnd %p %s ret %d value %08x%08x\n", win->hwnd, names[operation], ret, perf.args[1], perf.args[0] );
+        return ret;
+    }
+    case NATIVE_WINDOW_GET_WIDE_COLOR_SUPPORT:
+    case NATIVE_WINDOW_GET_HDR_SUPPORT:
+    {
+        bool *value = va_arg( args, bool * );
+        DWORD size = sizeof(perf);
+        int ret = android_ioctl( IOCTL_PERFORM, &perf, sizeof(perf), &perf, &size, NULL );
+        if (!ret) *value = perf.args[0];
+        va_end( args );
+        TRACE( "hwnd %p %s ret %d value %d\n", win->hwnd, names[operation], ret, perf.args[0] );
+        return ret;
+    }
     case NATIVE_WINDOW_SET_BUFFER_COUNT:
         perf.args[0] = va_arg( args, size_t );
         TRACE( "hwnd %p %s count %d\n", win->hwnd, names[operation], perf.args[0] );

@@ -127,6 +127,7 @@ UNEXPOSED_EXTENSIONS = {
     "VK_EXT_headless_surface",
     # Extensions for other platforms
     "VK_EXT_external_memory_dma_buf",
+    "VK_KHR_android_surface",
     "VK_EXT_image_drm_format_modifier",
     "VK_EXT_metal_surface",
     "VK_EXT_physical_device_drm",
@@ -2806,7 +2807,8 @@ class Generator(object):
         for name, ext, depends in enum_extensions(exts):
             if depends & UNSUPPORTED_EXTENSIONS:
                 UNSUPPORTED_EXTENSIONS.add(name)
-            elif ext.attrib.get("platform", "win32") not in UNEXPOSED_PLATFORMS | {"win32"}:
+            elif ext.attrib.get("platform", "win32") not in UNEXPOSED_PLATFORMS | {"win32"} and \
+                 name not in UNEXPOSED_EXTENSIONS:
                 UNSUPPORTED_EXTENSIONS.add(name)
             # Some extensions are not ready or have numbers reserved as a place holder
             # or are only supported for VulkanSC.

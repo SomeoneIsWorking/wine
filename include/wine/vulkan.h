@@ -643,6 +643,8 @@ typedef void* VkRemoteAddressNV;
 #define VK_KHR_8BIT_STORAGE_SPEC_VERSION 1
 #define VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME "VK_KHR_acceleration_structure"
 #define VK_KHR_ACCELERATION_STRUCTURE_SPEC_VERSION 13
+#define VK_KHR_ANDROID_SURFACE_EXTENSION_NAME "VK_KHR_android_surface"
+#define VK_KHR_ANDROID_SURFACE_SPEC_VERSION 6
 #define VK_KHR_BIND_MEMORY_2_EXTENSION_NAME "VK_KHR_bind_memory2"
 #define VK_KHR_BIND_MEMORY_2_SPEC_VERSION 1
 #define VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME "VK_KHR_buffer_device_address"
@@ -1258,6 +1260,7 @@ typedef VkFlags VkAccelerationStructureMotionInstanceFlagsNV;
 typedef VkFlags64 VkAccessFlags3KHR;
 typedef VkFlags VkAcquireProfilingLockFlagsKHR;
 typedef VkFlags VkAddressCopyFlagsKHR;
+typedef VkFlags VkAndroidSurfaceCreateFlagsKHR;
 typedef VkFlags64 VkBufferUsageFlags2;
 typedef VkBufferUsageFlags2 VkBufferUsageFlags2KHR;
 typedef VkFlags VkBufferViewCreateFlags;
@@ -5972,6 +5975,7 @@ typedef enum VkStructureType
     VK_STRUCTURE_TYPE_PRESENT_INFO_KHR = 1000001001,
     VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR = 1000004000,
     VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR = 1000006000,
+    VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR = 1000008000,
     VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR = 1000009000,
     VK_STRUCTURE_TYPE_DEBUG_REPORT_CALLBACK_CREATE_INFO_EXT = 1000011000,
     VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_RASTERIZATION_ORDER_AMD = 1000018000,
@@ -11655,6 +11659,14 @@ typedef struct VkAllocationCallbacks
     PFN_vkInternalAllocationNotification pfnInternalAllocation;
     PFN_vkInternalFreeNotification pfnInternalFree;
 } VkAllocationCallbacks;
+
+typedef struct VkAndroidSurfaceCreateInfoKHR
+{
+    VkStructureType sType;
+    const void *pNext;
+    VkAndroidSurfaceCreateFlagsKHR flags;
+    struct ANativeWindow *window;
+} VkAndroidSurfaceCreateInfoKHR;
 
 typedef struct VkAntiLagDataAMD
 {
@@ -21643,6 +21655,7 @@ typedef VkResult (VKAPI_PTR *PFN_vkCopyMicromapToMemoryEXT)(VkDevice device, VkD
 typedef VkResult (VKAPI_PTR *PFN_vkCreateAccelerationStructure2KHR)(VkDevice device, const VkAccelerationStructureCreateInfo2KHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkAccelerationStructureKHR *pAccelerationStructure);
 typedef VkResult (VKAPI_PTR *PFN_vkCreateAccelerationStructureKHR)(VkDevice device, const VkAccelerationStructureCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkAccelerationStructureKHR *pAccelerationStructure);
 typedef VkResult (VKAPI_PTR *PFN_vkCreateAccelerationStructureNV)(VkDevice device, const VkAccelerationStructureCreateInfoNV *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkAccelerationStructureNV *pAccelerationStructure);
+typedef VkResult (VKAPI_PTR *PFN_vkCreateAndroidSurfaceKHR)(VkInstance instance, const VkAndroidSurfaceCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface);
 typedef VkResult (VKAPI_PTR *PFN_vkCreateBuffer)(VkDevice device, const VkBufferCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer);
 typedef VkResult (VKAPI_PTR *PFN_vkCreateBufferView)(VkDevice device, const VkBufferViewCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkBufferView *pView);
 typedef VkResult (VKAPI_PTR *PFN_vkCreateCommandPool)(VkDevice device, const VkCommandPoolCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkCommandPool *pCommandPool);
@@ -22407,6 +22420,7 @@ VkResult VKAPI_CALL vkCopyMicromapToMemoryEXT(VkDevice device, VkDeferredOperati
 VkResult VKAPI_CALL vkCreateAccelerationStructure2KHR(VkDevice device, const VkAccelerationStructureCreateInfo2KHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkAccelerationStructureKHR *pAccelerationStructure);
 VkResult VKAPI_CALL vkCreateAccelerationStructureKHR(VkDevice device, const VkAccelerationStructureCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkAccelerationStructureKHR *pAccelerationStructure);
 VkResult VKAPI_CALL vkCreateAccelerationStructureNV(VkDevice device, const VkAccelerationStructureCreateInfoNV *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkAccelerationStructureNV *pAccelerationStructure);
+VkResult VKAPI_CALL vkCreateAndroidSurfaceKHR(VkInstance instance, const VkAndroidSurfaceCreateInfoKHR *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkSurfaceKHR *pSurface);
 VkResult VKAPI_CALL vkCreateBuffer(VkDevice device, const VkBufferCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkBuffer *pBuffer);
 VkResult VKAPI_CALL vkCreateBufferView(VkDevice device, const VkBufferViewCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkBufferView *pView);
 VkResult VKAPI_CALL vkCreateCommandPool(VkDevice device, const VkCommandPoolCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator, VkCommandPool *pCommandPool);
@@ -23901,6 +23915,7 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
     USE_VK_EXT(VK_KHR_external_semaphore_fd)
 
 #define ALL_VK_INSTANCE_FUNCS \
+    USE_VK_FUNC(vkCreateAndroidSurfaceKHR) \
     USE_VK_FUNC(vkCreateDebugReportCallbackEXT) \
     USE_VK_FUNC(vkCreateDebugUtilsMessengerEXT) \
     USE_VK_FUNC(vkCreateDevice) \
@@ -24007,6 +24022,7 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
 #define ALL_VK_INSTANCE_EXTS ALL_VK_CLIENT_INSTANCE_EXTS \
     USE_VK_EXT(VK_EXT_headless_surface) \
     USE_VK_EXT(VK_EXT_metal_surface) \
+    USE_VK_EXT(VK_KHR_android_surface) \
     USE_VK_EXT(VK_KHR_wayland_surface) \
     USE_VK_EXT(VK_KHR_xlib_surface) \
     USE_VK_EXT(VK_MVK_macos_surface)
