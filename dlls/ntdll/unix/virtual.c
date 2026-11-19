@@ -2799,6 +2799,11 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
 
     TRACE_(module)( "mapping PE file %s at %p-%p\n", debugstr_us(nt_name), ptr, ptr + total_size );
 
+#ifdef __ANDROID__
+    /* Android's SELinux denies execute on a private file mapping once it was written (execmod) */
+    removable = TRUE;
+#endif
+
     /* map the header */
 
     fstat( fd, &st );
