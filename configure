@@ -12572,7 +12572,11 @@ if test "x$ac_cv_cflags__fPIC__Wl___export_dynamic" = xyes
 then :
   WINELOADER_LDFLAGS="-Wl,--export-dynamic"
 fi
-    WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
+    case $HOST_ARCH in
+      aarch64|x86_64)
+        WINEPRELOADER_LDFLAGS="-static-pie -nostartfiles -nodefaultlibs" ;;
+      *)
+        WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
     { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking whether the compiler supports -Wl,--rosegment" >&5
 printf %s "checking whether the compiler supports -Wl,--rosegment... " >&6; }
 if test ${ac_cv_cflags__Wl___rosegment+y}
@@ -12603,6 +12607,8 @@ if test "x$ac_cv_cflags__Wl___rosegment" = xyes
 then :
   WINEPRELOADER_LDFLAGS="$WINEPRELOADER_LDFLAGS -Wl,--rosegment"
 fi
+ ;;
+    esac
 
     { printf '%s\n' "$as_me:${as_lineno-$LINENO}: checking for -lGLESv2" >&5
 printf %s "checking for -lGLESv2... " >&6; }

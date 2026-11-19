@@ -1034,8 +1034,14 @@ case $host_os in
     enable_wineandroid_drv=${enable_wineandroid_drv:-yes}
     WINE_TRY_CFLAGS([-Wl,-z,defs],[UNIXLDFLAGS="$UNIXLDFLAGS -Wl,-z,defs"])
     WINE_TRY_CFLAGS([-fPIC -Wl,--export-dynamic],[WINELOADER_LDFLAGS="-Wl,--export-dynamic"])
-    WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
-    WINE_TRY_CFLAGS([-Wl,--rosegment], [WINEPRELOADER_LDFLAGS="$WINEPRELOADER_LDFLAGS -Wl,--rosegment"])
+    case $HOST_ARCH in
+      aarch64|x86_64)
+        dnl A fixed text address would lie in the low 8G the preloader reserves.
+        WINEPRELOADER_LDFLAGS="-static-pie -nostartfiles -nodefaultlibs" ;;
+      *)
+        WINEPRELOADER_LDFLAGS="-static -nostartfiles -nodefaultlibs -Wl,-Ttext=0x7d400000"
+        WINE_TRY_CFLAGS([-Wl,--rosegment], [WINEPRELOADER_LDFLAGS="$WINEPRELOADER_LDFLAGS -Wl,--rosegment"]) ;;
+    esac
 
     WINE_CHECK_SONAME(GLESv2,glFlush)
     AC_PATH_PROG([GRADLE], [gradle])
