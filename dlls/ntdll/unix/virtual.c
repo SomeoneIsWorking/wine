@@ -3192,7 +3192,8 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
             size -= offset;
         }
 
-        pe_mapping->image.base = wine_server_client_ptr( view->base );
+        /* the view may lie elsewhere than the server's address, which a 39-bit host cannot map */
+        pe_mapping->image.base = pe_mapping->image.map_addr = wine_server_client_ptr( view->base );
         SERVER_START_REQ( map_image_view )
         {
             req->mapping = wine_server_obj_handle( mapping );
