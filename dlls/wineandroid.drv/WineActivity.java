@@ -152,6 +152,11 @@ public class WineActivity extends Activity
         putenv( "WINEPREFIX", prefix.toString() );
         putenv( "LD_LIBRARY_PATH", libdir.toString() + ":" + getPackageResourcePath() + "!/lib/" + wine_abi + ":" + getApplicationInfo().nativeLibraryDir );
         putenv( "LC_ALL", locale );
+        // Without Mono or Gecko in the build, a new prefix would stop on their install dialogs.
+        File share = new File( getFilesDir(), "share/wine" );
+        String missing = (new File( share, "mono" ).exists() ? "" : "mscoree,") +
+                         (new File( share, "gecko" ).exists() ? "" : "mshtml,");
+        if (!missing.isEmpty()) putenv( "WINEDLLOVERRIDES", missing.substring( 0, missing.length() - 1 ) + "=" );
         putenv( "LANG", locale );
 
         if (cmdline == null)
