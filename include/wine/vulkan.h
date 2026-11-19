@@ -291,6 +291,8 @@ typedef void* VkRemoteAddressNV;
 #define VK_AMD_SHADER_TRINARY_MINMAX_SPEC_VERSION 1
 #define VK_AMD_TEXTURE_GATHER_BIAS_LOD_EXTENSION_NAME "VK_AMD_texture_gather_bias_lod"
 #define VK_AMD_TEXTURE_GATHER_BIAS_LOD_SPEC_VERSION 1
+#define VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME "VK_ANDROID_external_memory_android_hardware_buffer"
+#define VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_SPEC_VERSION 5
 #define VK_ARM_DATA_GRAPH_EXTENSION_NAME "VK_ARM_data_graph"
 #define VK_ARM_DATA_GRAPH_INSTRUCTION_SET_TOSA_EXTENSION_NAME "VK_ARM_data_graph_instruction_set_tosa"
 #define VK_ARM_DATA_GRAPH_INSTRUCTION_SET_TOSA_SPEC_VERSION 1
@@ -3294,6 +3296,7 @@ typedef enum VkExternalMemoryHandleTypeFlagBits
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT = 0x00000080,
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_MAPPED_FOREIGN_MEMORY_BIT_EXT = 0x00000100,
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT = 0x00000200,
+    VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID = 0x00000400,
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLBUFFER_BIT_EXT = 0x00010000,
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLTEXTURE_BIT_EXT = 0x00020000,
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT = 0x00040000,
@@ -6166,6 +6169,13 @@ typedef enum VkStructureType
     VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT = 1000128002,
     VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT = 1000128003,
     VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT = 1000128004,
+    VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_USAGE_ANDROID = 1000129000,
+    VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID = 1000129001,
+    VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID = 1000129002,
+    VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID = 1000129003,
+    VK_STRUCTURE_TYPE_MEMORY_GET_ANDROID_HARDWARE_BUFFER_INFO_ANDROID = 1000129004,
+    VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID = 1000129005,
+    VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_2_ANDROID = 1000129006,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES = 1000130000,
     VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO = 1000130001,
     VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GPA_FEATURES_AMD = 1000133000,
@@ -11660,6 +11670,49 @@ typedef struct VkAllocationCallbacks
     PFN_vkInternalFreeNotification pfnInternalFree;
 } VkAllocationCallbacks;
 
+typedef struct VkAndroidHardwareBufferFormatProperties2ANDROID
+{
+    VkStructureType sType;
+    void *pNext;
+    VkFormat format;
+    uint64_t WINE_VK_ALIGN(8) externalFormat;
+    VkFormatFeatureFlags2 WINE_VK_ALIGN(8) formatFeatures;
+    VkComponentMapping samplerYcbcrConversionComponents;
+    VkSamplerYcbcrModelConversion suggestedYcbcrModel;
+    VkSamplerYcbcrRange suggestedYcbcrRange;
+    VkChromaLocation suggestedXChromaOffset;
+    VkChromaLocation suggestedYChromaOffset;
+} VkAndroidHardwareBufferFormatProperties2ANDROID;
+
+typedef struct VkAndroidHardwareBufferFormatPropertiesANDROID
+{
+    VkStructureType sType;
+    void *pNext;
+    VkFormat format;
+    uint64_t WINE_VK_ALIGN(8) externalFormat;
+    VkFormatFeatureFlags formatFeatures;
+    VkComponentMapping samplerYcbcrConversionComponents;
+    VkSamplerYcbcrModelConversion suggestedYcbcrModel;
+    VkSamplerYcbcrRange suggestedYcbcrRange;
+    VkChromaLocation suggestedXChromaOffset;
+    VkChromaLocation suggestedYChromaOffset;
+} VkAndroidHardwareBufferFormatPropertiesANDROID;
+
+typedef struct VkAndroidHardwareBufferPropertiesANDROID
+{
+    VkStructureType sType;
+    void *pNext;
+    VkDeviceSize WINE_VK_ALIGN(8) allocationSize;
+    uint32_t memoryTypeBits;
+} VkAndroidHardwareBufferPropertiesANDROID;
+
+typedef struct VkAndroidHardwareBufferUsageANDROID
+{
+    VkStructureType sType;
+    void *pNext;
+    uint64_t WINE_VK_ALIGN(8) androidHardwareBufferUsage;
+} VkAndroidHardwareBufferUsageANDROID;
+
 typedef struct VkAndroidSurfaceCreateInfoKHR
 {
     VkStructureType sType;
@@ -13584,6 +13637,13 @@ typedef struct VkExternalFenceProperties
 } VkExternalFenceProperties;
 typedef VkExternalFenceProperties VkExternalFencePropertiesKHR;
 
+typedef struct VkExternalFormatANDROID
+{
+    VkStructureType sType;
+    void *pNext;
+    uint64_t WINE_VK_ALIGN(8) externalFormat;
+} VkExternalFormatANDROID;
+
 typedef struct VkExternalImageFormatProperties
 {
     VkStructureType sType;
@@ -14228,6 +14288,13 @@ typedef struct VkImageViewUsageCreateInfo
 } VkImageViewUsageCreateInfo;
 typedef VkImageViewUsageCreateInfo VkImageViewUsageCreateInfoKHR;
 
+typedef struct VkImportAndroidHardwareBufferInfoANDROID
+{
+    VkStructureType sType;
+    const void *pNext;
+    struct AHardwareBuffer *buffer;
+} VkImportAndroidHardwareBufferInfoANDROID;
+
 typedef struct VkImportFenceFdInfoKHR
 {
     VkStructureType sType;
@@ -14491,6 +14558,13 @@ typedef struct VkMemoryFdPropertiesKHR
     void *pNext;
     uint32_t memoryTypeBits;
 } VkMemoryFdPropertiesKHR;
+
+typedef struct VkMemoryGetAndroidHardwareBufferInfoANDROID
+{
+    VkStructureType sType;
+    const void *pNext;
+    VkDeviceMemory WINE_VK_ALIGN(8) memory;
+} VkMemoryGetAndroidHardwareBufferInfoANDROID;
 
 typedef struct VkMemoryGetFdInfoKHR
 {
@@ -21791,6 +21865,7 @@ typedef VkDeviceAddress (VKAPI_PTR *PFN_vkGetAccelerationStructureDeviceAddressK
 typedef VkResult (VKAPI_PTR *PFN_vkGetAccelerationStructureHandleNV)(VkDevice device, VkAccelerationStructureNV accelerationStructure, size_t dataSize, void *pData);
 typedef void (VKAPI_PTR *PFN_vkGetAccelerationStructureMemoryRequirementsNV)(VkDevice device, const VkAccelerationStructureMemoryRequirementsInfoNV *pInfo, VkMemoryRequirements2 *pMemoryRequirements);
 typedef VkResult (VKAPI_PTR *PFN_vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT)(VkDevice device, const VkAccelerationStructureCaptureDescriptorDataInfoEXT *pInfo, void *pData);
+typedef VkResult (VKAPI_PTR *PFN_vkGetAndroidHardwareBufferPropertiesANDROID)(VkDevice device, const struct AHardwareBuffer *buffer, VkAndroidHardwareBufferPropertiesANDROID *pProperties);
 typedef VkDeviceAddress (VKAPI_PTR *PFN_vkGetBufferDeviceAddress)(VkDevice device, const VkBufferDeviceAddressInfo *pInfo);
 typedef VkDeviceAddress (VKAPI_PTR *PFN_vkGetBufferDeviceAddressEXT)(VkDevice device, const VkBufferDeviceAddressInfo *pInfo);
 typedef VkDeviceAddress (VKAPI_PTR *PFN_vkGetBufferDeviceAddressKHR)(VkDevice device, const VkBufferDeviceAddressInfo *pInfo);
@@ -21874,6 +21949,7 @@ typedef VkResult (VKAPI_PTR *PFN_vkGetImageViewOpaqueCaptureDescriptorDataEXT)(V
 typedef PFN_vkVoidFunction (VKAPI_PTR *PFN_vkGetInstanceProcAddr)(VkInstance instance, const char *pName);
 typedef void (VKAPI_PTR *PFN_vkGetLatencyTimingsLegacyNV)(VkDevice device, void *pTimings);
 typedef void (VKAPI_PTR *PFN_vkGetLatencyTimingsNV)(VkDevice device, VkSwapchainKHR swapchain, VkGetLatencyMarkerInfoNV *pLatencyMarkerInfo);
+typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryAndroidHardwareBufferANDROID)(VkDevice device, const VkMemoryGetAndroidHardwareBufferInfoANDROID *pInfo, struct AHardwareBuffer **pBuffer);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryFdKHR)(VkDevice device, const VkMemoryGetFdInfoKHR *pGetFdInfo, int *pFd);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryFdPropertiesKHR)(VkDevice device, VkExternalMemoryHandleTypeFlagBits handleType, int fd, VkMemoryFdPropertiesKHR *pMemoryFdProperties);
 typedef VkResult (VKAPI_PTR *PFN_vkGetMemoryHostPointerPropertiesEXT)(VkDevice device, VkExternalMemoryHandleTypeFlagBits handleType, const void *pHostPointer, VkMemoryHostPointerPropertiesEXT *pMemoryHostPointerProperties);
@@ -22556,6 +22632,7 @@ VkDeviceAddress VKAPI_CALL vkGetAccelerationStructureDeviceAddressKHR(VkDevice d
 VkResult VKAPI_CALL vkGetAccelerationStructureHandleNV(VkDevice device, VkAccelerationStructureNV accelerationStructure, size_t dataSize, void *pData);
 void VKAPI_CALL vkGetAccelerationStructureMemoryRequirementsNV(VkDevice device, const VkAccelerationStructureMemoryRequirementsInfoNV *pInfo, VkMemoryRequirements2 *pMemoryRequirements);
 VkResult VKAPI_CALL vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT(VkDevice device, const VkAccelerationStructureCaptureDescriptorDataInfoEXT *pInfo, void *pData);
+VkResult VKAPI_CALL vkGetAndroidHardwareBufferPropertiesANDROID(VkDevice device, const struct AHardwareBuffer *buffer, VkAndroidHardwareBufferPropertiesANDROID *pProperties);
 VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddress(VkDevice device, const VkBufferDeviceAddressInfo *pInfo);
 VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddressEXT(VkDevice device, const VkBufferDeviceAddressInfo *pInfo);
 VkDeviceAddress VKAPI_CALL vkGetBufferDeviceAddressKHR(VkDevice device, const VkBufferDeviceAddressInfo *pInfo);
@@ -22639,6 +22716,7 @@ VkResult VKAPI_CALL vkGetImageViewOpaqueCaptureDescriptorDataEXT(VkDevice device
 PFN_vkVoidFunction VKAPI_CALL vkGetInstanceProcAddr(VkInstance instance, const char *pName);
 void VKAPI_CALL vkGetLatencyTimingsLegacyNV(VkDevice device, void *pTimings);
 void VKAPI_CALL vkGetLatencyTimingsNV(VkDevice device, VkSwapchainKHR swapchain, VkGetLatencyMarkerInfoNV *pLatencyMarkerInfo);
+VkResult VKAPI_CALL vkGetMemoryAndroidHardwareBufferANDROID(VkDevice device, const VkMemoryGetAndroidHardwareBufferInfoANDROID *pInfo, struct AHardwareBuffer **pBuffer);
 VkResult VKAPI_CALL vkGetMemoryFdKHR(VkDevice device, const VkMemoryGetFdInfoKHR *pGetFdInfo, int *pFd);
 VkResult VKAPI_CALL vkGetMemoryFdPropertiesKHR(VkDevice device, VkExternalMemoryHandleTypeFlagBits handleType, int fd, VkMemoryFdPropertiesKHR *pMemoryFdProperties);
 VkResult VKAPI_CALL vkGetMemoryHostPointerPropertiesEXT(VkDevice device, VkExternalMemoryHandleTypeFlagBits handleType, const void *pHostPointer, VkMemoryHostPointerPropertiesEXT *pMemoryHostPointerProperties);
@@ -23295,6 +23373,7 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
     USE_VK_FUNC(vkGetAccelerationStructureHandleNV) \
     USE_VK_FUNC(vkGetAccelerationStructureMemoryRequirementsNV) \
     USE_VK_FUNC(vkGetAccelerationStructureOpaqueCaptureDescriptorDataEXT) \
+    USE_VK_FUNC(vkGetAndroidHardwareBufferPropertiesANDROID) \
     USE_VK_FUNC(vkGetBufferDeviceAddress) \
     USE_VK_FUNC(vkGetBufferDeviceAddressEXT) \
     USE_VK_FUNC(vkGetBufferDeviceAddressKHR) \
@@ -23376,6 +23455,7 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
     USE_VK_FUNC(vkGetImageViewOpaqueCaptureDescriptorDataEXT) \
     USE_VK_FUNC(vkGetLatencyTimingsLegacyNV) \
     USE_VK_FUNC(vkGetLatencyTimingsNV) \
+    USE_VK_FUNC(vkGetMemoryAndroidHardwareBufferANDROID) \
     USE_VK_FUNC(vkGetMemoryFdKHR) \
     USE_VK_FUNC(vkGetMemoryFdPropertiesKHR) \
     USE_VK_FUNC(vkGetMemoryHostPointerPropertiesEXT) \
@@ -23905,6 +23985,7 @@ VkResult VKAPI_CALL vkWriteSamplerDescriptorsEXT(VkDevice device, uint32_t sampl
     USE_VK_EXT(VK_VALVE_video_encode_rgb_conversion)
 
 #define ALL_VK_DEVICE_EXTS ALL_VK_CLIENT_DEVICE_EXTS \
+    USE_VK_EXT(VK_ANDROID_external_memory_android_hardware_buffer) \
     USE_VK_EXT(VK_EXT_external_memory_dma_buf) \
     USE_VK_EXT(VK_EXT_external_memory_metal) \
     USE_VK_EXT(VK_EXT_image_drm_format_modifier) \

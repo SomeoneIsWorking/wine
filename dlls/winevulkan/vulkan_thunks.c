@@ -30975,51 +30975,20 @@ static void convert_VkShaderInstrumentationMetricDescriptionARM_array_host_to_wi
     }
 }
 
-#ifdef _WIN64
-static void convert_VkMappedMemoryRange_win64_to_host(const VkMappedMemoryRange *in, VkMappedMemoryRange *out)
-{
-    if (!in) return;
-
-    out->sType = in->sType;
-    out->pNext = in->pNext;
-    out->memory = vulkan_device_memory_from_handle(in->memory)->host.device_memory;
-    out->offset = in->offset;
-    out->size = in->size;
-}
-#endif /* _WIN64 */
-
-#ifdef _WIN64
-static const VkMappedMemoryRange *convert_VkMappedMemoryRange_array_win64_to_host(struct conversion_context *ctx, const VkMappedMemoryRange *in, uint32_t count)
-{
-    VkMappedMemoryRange *out;
-    unsigned int i;
-
-    if (!in || !count) return NULL;
-
-    out = conversion_context_alloc(ctx, count * sizeof(*out));
-    for (i = 0; i < count; i++)
-    {
-        convert_VkMappedMemoryRange_win64_to_host(&in[i], &out[i]);
-    }
-
-    return out;
-}
-#endif /* _WIN64 */
-
-static void convert_VkMappedMemoryRange_win32_to_host(const VkMappedMemoryRange32 *in, VkMappedMemoryRange *out)
+static void convert_VkMappedMemoryRange_win32_to_unwrapped_host(const VkMappedMemoryRange32 *in, VkMappedMemoryRange *out)
 {
     if (!in) return;
 
     out->sType = in->sType;
     out->pNext = NULL;
-    out->memory = vulkan_device_memory_from_handle(in->memory)->host.device_memory;
+    out->memory = in->memory;
     out->offset = in->offset;
     out->size = in->size;
     if (in->pNext)
         FIXME("Unexpected pNext\n");
 }
 
-static const VkMappedMemoryRange *convert_VkMappedMemoryRange_array_win32_to_host(struct conversion_context *ctx, const VkMappedMemoryRange32 *in, uint32_t count)
+static const VkMappedMemoryRange *convert_VkMappedMemoryRange_array_win32_to_unwrapped_host(struct conversion_context *ctx, const VkMappedMemoryRange32 *in, uint32_t count)
 {
     VkMappedMemoryRange *out;
     unsigned int i;
@@ -31029,7 +30998,7 @@ static const VkMappedMemoryRange *convert_VkMappedMemoryRange_array_win32_to_hos
     out = conversion_context_alloc(ctx, count * sizeof(*out));
     for (i = 0; i < count; i++)
     {
-        convert_VkMappedMemoryRange_win32_to_host(&in[i], &out[i]);
+        convert_VkMappedMemoryRange_win32_to_unwrapped_host(&in[i], &out[i]);
     }
 
     return out;
@@ -63258,16 +63227,10 @@ static NTSTATUS thunk32_vkEnumeratePhysicalDevices(void *args)
 static NTSTATUS thunk64_vkFlushMappedMemoryRanges(void *args)
 {
     struct vkFlushMappedMemoryRanges_params *params = args;
-    const VkMappedMemoryRange *pMemoryRanges_host;
-    struct conversion_context local_ctx;
-    struct conversion_context *ctx = &local_ctx;
 
     TRACE("%p, %u, %p\n", params->device, params->memoryRangeCount, params->pMemoryRanges);
 
-    init_conversion_context(ctx);
-    pMemoryRanges_host = convert_VkMappedMemoryRange_array_win64_to_host(ctx, params->pMemoryRanges, params->memoryRangeCount);
-    params->result = vulkan_device_from_handle(params->device)->p_vkFlushMappedMemoryRanges(vulkan_device_from_handle(params->device)->host.device, params->memoryRangeCount, pMemoryRanges_host);
-    free_conversion_context(ctx);
+    params->result = vk_funcs->p_vkFlushMappedMemoryRanges(params->device, params->memoryRangeCount, params->pMemoryRanges);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -63288,8 +63251,8 @@ static NTSTATUS thunk32_vkFlushMappedMemoryRanges(void *args)
     TRACE("%#x, %u, %#x\n", params->device, params->memoryRangeCount, params->pMemoryRanges);
 
     init_conversion_context(ctx);
-    pMemoryRanges_host = convert_VkMappedMemoryRange_array_win32_to_host(ctx, (const VkMappedMemoryRange32 *)UlongToPtr(params->pMemoryRanges), params->memoryRangeCount);
-    params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkFlushMappedMemoryRanges(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, params->memoryRangeCount, pMemoryRanges_host);
+    pMemoryRanges_host = convert_VkMappedMemoryRange_array_win32_to_unwrapped_host(ctx, (const VkMappedMemoryRange32 *)UlongToPtr(params->pMemoryRanges), params->memoryRangeCount);
+    params->result = vk_funcs->p_vkFlushMappedMemoryRanges((VkDevice)UlongToPtr(params->device), params->memoryRangeCount, pMemoryRanges_host);
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
 }
@@ -64779,7 +64742,7 @@ static NTSTATUS thunk64_vkGetDeviceImageMemoryRequirementsKHR(void *args)
 
     init_conversion_context(ctx);
     convert_VkDeviceImageMemoryRequirements_win64_to_host(ctx, params->pInfo, &pInfo_host);
-    vulkan_device_from_handle(params->device)->p_vkGetDeviceImageMemoryRequirementsKHR(vulkan_device_from_handle(params->device)->host.device, &pInfo_host, params->pMemoryRequirements);
+    vk_funcs->p_vkGetDeviceImageMemoryRequirementsKHR(params->device, &pInfo_host, params->pMemoryRequirements);
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
 }
@@ -64803,7 +64766,7 @@ static NTSTATUS thunk32_vkGetDeviceImageMemoryRequirementsKHR(void *args)
     init_conversion_context(ctx);
     convert_VkDeviceImageMemoryRequirements_win32_to_host(ctx, (const VkDeviceImageMemoryRequirements32 *)UlongToPtr(params->pInfo), &pInfo_host);
     convert_VkMemoryRequirements2_win32_to_host(ctx, (VkMemoryRequirements232 *)UlongToPtr(params->pMemoryRequirements), &pMemoryRequirements_host);
-    vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkGetDeviceImageMemoryRequirementsKHR(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, &pInfo_host, &pMemoryRequirements_host);
+    vk_funcs->p_vkGetDeviceImageMemoryRequirementsKHR((VkDevice)UlongToPtr(params->device), &pInfo_host, &pMemoryRequirements_host);
     convert_VkMemoryRequirements2_host_to_win32(&pMemoryRequirements_host, (VkMemoryRequirements232 *)UlongToPtr(params->pMemoryRequirements));
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
@@ -65599,7 +65562,7 @@ static NTSTATUS thunk64_vkGetImageMemoryRequirements(void *args)
 
     TRACE("%p, 0x%s, %p\n", params->device, wine_dbgstr_longlong(params->image), params->pMemoryRequirements);
 
-    vulkan_device_from_handle(params->device)->p_vkGetImageMemoryRequirements(vulkan_device_from_handle(params->device)->host.device, params->image, params->pMemoryRequirements);
+    vk_funcs->p_vkGetImageMemoryRequirements(params->device, params->image, params->pMemoryRequirements);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -65616,7 +65579,7 @@ static NTSTATUS thunk32_vkGetImageMemoryRequirements(void *args)
 
     TRACE("%#x, 0x%s, %#x\n", params->device, wine_dbgstr_longlong(params->image), params->pMemoryRequirements);
 
-    vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkGetImageMemoryRequirements(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, params->image, &pMemoryRequirements_host);
+    vk_funcs->p_vkGetImageMemoryRequirements((VkDevice)UlongToPtr(params->device), params->image, &pMemoryRequirements_host);
     convert_VkMemoryRequirements_host_to_win32(&pMemoryRequirements_host, (VkMemoryRequirements32 *)UlongToPtr(params->pMemoryRequirements));
     return STATUS_SUCCESS;
 }
@@ -65628,7 +65591,7 @@ static NTSTATUS thunk64_vkGetImageMemoryRequirements2(void *args)
 
     TRACE("%p, %p, %p\n", params->device, params->pInfo, params->pMemoryRequirements);
 
-    vulkan_device_from_handle(params->device)->p_vkGetImageMemoryRequirements2(vulkan_device_from_handle(params->device)->host.device, params->pInfo, params->pMemoryRequirements);
+    vk_funcs->p_vkGetImageMemoryRequirements2(params->device, params->pInfo, params->pMemoryRequirements);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -65651,7 +65614,7 @@ static NTSTATUS thunk32_vkGetImageMemoryRequirements2(void *args)
     init_conversion_context(ctx);
     convert_VkImageMemoryRequirementsInfo2_win32_to_host(ctx, (const VkImageMemoryRequirementsInfo232 *)UlongToPtr(params->pInfo), &pInfo_host);
     convert_VkMemoryRequirements2_win32_to_host(ctx, (VkMemoryRequirements232 *)UlongToPtr(params->pMemoryRequirements), &pMemoryRequirements_host);
-    vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkGetImageMemoryRequirements2(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, &pInfo_host, &pMemoryRequirements_host);
+    vk_funcs->p_vkGetImageMemoryRequirements2((VkDevice)UlongToPtr(params->device), &pInfo_host, &pMemoryRequirements_host);
     convert_VkMemoryRequirements2_host_to_win32(&pMemoryRequirements_host, (VkMemoryRequirements232 *)UlongToPtr(params->pMemoryRequirements));
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
@@ -65664,7 +65627,7 @@ static NTSTATUS thunk64_vkGetImageMemoryRequirements2KHR(void *args)
 
     TRACE("%p, %p, %p\n", params->device, params->pInfo, params->pMemoryRequirements);
 
-    vulkan_device_from_handle(params->device)->p_vkGetImageMemoryRequirements2KHR(vulkan_device_from_handle(params->device)->host.device, params->pInfo, params->pMemoryRequirements);
+    vk_funcs->p_vkGetImageMemoryRequirements2KHR(params->device, params->pInfo, params->pMemoryRequirements);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -65687,7 +65650,7 @@ static NTSTATUS thunk32_vkGetImageMemoryRequirements2KHR(void *args)
     init_conversion_context(ctx);
     convert_VkImageMemoryRequirementsInfo2_win32_to_host(ctx, (const VkImageMemoryRequirementsInfo232 *)UlongToPtr(params->pInfo), &pInfo_host);
     convert_VkMemoryRequirements2_win32_to_host(ctx, (VkMemoryRequirements232 *)UlongToPtr(params->pMemoryRequirements), &pMemoryRequirements_host);
-    vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkGetImageMemoryRequirements2KHR(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, &pInfo_host, &pMemoryRequirements_host);
+    vk_funcs->p_vkGetImageMemoryRequirements2KHR((VkDevice)UlongToPtr(params->device), &pInfo_host, &pMemoryRequirements_host);
     convert_VkMemoryRequirements2_host_to_win32(&pMemoryRequirements_host, (VkMemoryRequirements232 *)UlongToPtr(params->pMemoryRequirements));
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
@@ -67295,7 +67258,7 @@ static NTSTATUS thunk64_vkGetPhysicalDeviceMemoryProperties(void *args)
 
     TRACE("%p, %p\n", params->physicalDevice, params->pMemoryProperties);
 
-    vulkan_physical_device_from_handle(params->physicalDevice)->instance->p_vkGetPhysicalDeviceMemoryProperties(vulkan_physical_device_from_handle(params->physicalDevice)->host.physical_device, params->pMemoryProperties);
+    vk_funcs->p_vkGetPhysicalDeviceMemoryProperties(params->physicalDevice, params->pMemoryProperties);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -67311,7 +67274,7 @@ static NTSTATUS thunk32_vkGetPhysicalDeviceMemoryProperties(void *args)
 
     TRACE("%#x, %#x\n", params->physicalDevice, params->pMemoryProperties);
 
-    vulkan_physical_device_from_handle((VkPhysicalDevice)UlongToPtr(params->physicalDevice))->instance->p_vkGetPhysicalDeviceMemoryProperties(vulkan_physical_device_from_handle((VkPhysicalDevice)UlongToPtr(params->physicalDevice))->host.physical_device, &pMemoryProperties_host);
+    vk_funcs->p_vkGetPhysicalDeviceMemoryProperties((VkPhysicalDevice)UlongToPtr(params->physicalDevice), &pMemoryProperties_host);
     convert_VkPhysicalDeviceMemoryProperties_host_to_win32(&pMemoryProperties_host, (VkPhysicalDeviceMemoryProperties32 *)UlongToPtr(params->pMemoryProperties));
     return STATUS_SUCCESS;
 }
@@ -67323,7 +67286,7 @@ static NTSTATUS thunk64_vkGetPhysicalDeviceMemoryProperties2(void *args)
 
     TRACE("%p, %p\n", params->physicalDevice, params->pMemoryProperties);
 
-    vulkan_physical_device_from_handle(params->physicalDevice)->instance->p_vkGetPhysicalDeviceMemoryProperties2(vulkan_physical_device_from_handle(params->physicalDevice)->host.physical_device, params->pMemoryProperties);
+    vk_funcs->p_vkGetPhysicalDeviceMemoryProperties2(params->physicalDevice, params->pMemoryProperties);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -67343,7 +67306,7 @@ static NTSTATUS thunk32_vkGetPhysicalDeviceMemoryProperties2(void *args)
 
     init_conversion_context(ctx);
     convert_VkPhysicalDeviceMemoryProperties2_win32_to_host(ctx, (VkPhysicalDeviceMemoryProperties232 *)UlongToPtr(params->pMemoryProperties), &pMemoryProperties_host);
-    vulkan_physical_device_from_handle((VkPhysicalDevice)UlongToPtr(params->physicalDevice))->instance->p_vkGetPhysicalDeviceMemoryProperties2(vulkan_physical_device_from_handle((VkPhysicalDevice)UlongToPtr(params->physicalDevice))->host.physical_device, &pMemoryProperties_host);
+    vk_funcs->p_vkGetPhysicalDeviceMemoryProperties2((VkPhysicalDevice)UlongToPtr(params->physicalDevice), &pMemoryProperties_host);
     convert_VkPhysicalDeviceMemoryProperties2_host_to_win32(&pMemoryProperties_host, (VkPhysicalDeviceMemoryProperties232 *)UlongToPtr(params->pMemoryProperties));
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
@@ -67356,7 +67319,7 @@ static NTSTATUS thunk64_vkGetPhysicalDeviceMemoryProperties2KHR(void *args)
 
     TRACE("%p, %p\n", params->physicalDevice, params->pMemoryProperties);
 
-    vulkan_physical_device_from_handle(params->physicalDevice)->instance->p_vkGetPhysicalDeviceMemoryProperties2KHR(vulkan_physical_device_from_handle(params->physicalDevice)->host.physical_device, params->pMemoryProperties);
+    vk_funcs->p_vkGetPhysicalDeviceMemoryProperties2KHR(params->physicalDevice, params->pMemoryProperties);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -67376,7 +67339,7 @@ static NTSTATUS thunk32_vkGetPhysicalDeviceMemoryProperties2KHR(void *args)
 
     init_conversion_context(ctx);
     convert_VkPhysicalDeviceMemoryProperties2_win32_to_host(ctx, (VkPhysicalDeviceMemoryProperties232 *)UlongToPtr(params->pMemoryProperties), &pMemoryProperties_host);
-    vulkan_physical_device_from_handle((VkPhysicalDevice)UlongToPtr(params->physicalDevice))->instance->p_vkGetPhysicalDeviceMemoryProperties2KHR(vulkan_physical_device_from_handle((VkPhysicalDevice)UlongToPtr(params->physicalDevice))->host.physical_device, &pMemoryProperties_host);
+    vk_funcs->p_vkGetPhysicalDeviceMemoryProperties2KHR((VkPhysicalDevice)UlongToPtr(params->physicalDevice), &pMemoryProperties_host);
     convert_VkPhysicalDeviceMemoryProperties2_host_to_win32(&pMemoryProperties_host, (VkPhysicalDeviceMemoryProperties232 *)UlongToPtr(params->pMemoryProperties));
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
@@ -69770,16 +69733,10 @@ static NTSTATUS thunk32_vkInitializePerformanceApiINTEL(void *args)
 static NTSTATUS thunk64_vkInvalidateMappedMemoryRanges(void *args)
 {
     struct vkInvalidateMappedMemoryRanges_params *params = args;
-    const VkMappedMemoryRange *pMemoryRanges_host;
-    struct conversion_context local_ctx;
-    struct conversion_context *ctx = &local_ctx;
 
     TRACE("%p, %u, %p\n", params->device, params->memoryRangeCount, params->pMemoryRanges);
 
-    init_conversion_context(ctx);
-    pMemoryRanges_host = convert_VkMappedMemoryRange_array_win64_to_host(ctx, params->pMemoryRanges, params->memoryRangeCount);
-    params->result = vulkan_device_from_handle(params->device)->p_vkInvalidateMappedMemoryRanges(vulkan_device_from_handle(params->device)->host.device, params->memoryRangeCount, pMemoryRanges_host);
-    free_conversion_context(ctx);
+    params->result = vk_funcs->p_vkInvalidateMappedMemoryRanges(params->device, params->memoryRangeCount, params->pMemoryRanges);
     return STATUS_SUCCESS;
 }
 #endif /* _WIN64 */
@@ -69800,8 +69757,8 @@ static NTSTATUS thunk32_vkInvalidateMappedMemoryRanges(void *args)
     TRACE("%#x, %u, %#x\n", params->device, params->memoryRangeCount, params->pMemoryRanges);
 
     init_conversion_context(ctx);
-    pMemoryRanges_host = convert_VkMappedMemoryRange_array_win32_to_host(ctx, (const VkMappedMemoryRange32 *)UlongToPtr(params->pMemoryRanges), params->memoryRangeCount);
-    params->result = vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->p_vkInvalidateMappedMemoryRanges(vulkan_device_from_handle((VkDevice)UlongToPtr(params->device))->host.device, params->memoryRangeCount, pMemoryRanges_host);
+    pMemoryRanges_host = convert_VkMappedMemoryRange_array_win32_to_unwrapped_host(ctx, (const VkMappedMemoryRange32 *)UlongToPtr(params->pMemoryRanges), params->memoryRangeCount);
+    params->result = vk_funcs->p_vkInvalidateMappedMemoryRanges((VkDevice)UlongToPtr(params->device), params->memoryRangeCount, pMemoryRanges_host);
     free_conversion_context(ctx);
     return STATUS_SUCCESS;
 }

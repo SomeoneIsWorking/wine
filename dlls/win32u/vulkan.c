@@ -26,7 +26,15 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <errno.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/dma-buf.h>
+#include <android/hardware_buffer.h>
+#endif
 
 #include "ntstatus.h"
 #include "win32u_private.h"
@@ -64,6 +72,26 @@ static BOOL use_external_memory(void)
 {
     return zero_bits != 0;
 }
+
+#ifdef __ANDROID__
+
+static typeof(AHardwareBuffer_allocate) *pAHardwareBuffer_allocate;
+static typeof(AHardwareBuffer_release) *pAHardwareBuffer_release;
+static typeof(AHardwareBuffer_sendHandleToUnixSocket) *pAHardwareBuffer_sendHandleToUnixSocket;
+
+static BOOL load_android_hardware_buffer(void)
+{
+    void *libandroid;
+
+    if (pAHardwareBuffer_allocate) return TRUE;
+    if (!(libandroid = dlopen( "libandroid.so", RTLD_NOW ))) return FALSE;
+    pAHardwareBuffer_release = dlsym( libandroid, "AHardwareBuffer_release" );
+    pAHardwareBuffer_sendHandleToUnixSocket = dlsym( libandroid, "AHardwareBuffer_sendHandleToUnixSocket" );
+    pAHardwareBuffer_allocate = dlsym( libandroid, "AHardwareBuffer_allocate" );
+    return pAHardwareBuffer_allocate && pAHardwareBuffer_release && pAHardwareBuffer_sendHandleToUnixSocket;
+}
+
+#endif
 
 struct mempool
 {
@@ -120,6 +148,9 @@ struct device_memory
     struct vulkan_device_memory obj;
     VkDeviceSize size;
     void *vm_map;
+    struct AHardwareBuffer *hardware_buffer;  /* behind vm_map when win32u maps the memory itself */
+    int dma_buf_fd;  /* the hardware buffer's memory, for cache maintenance of a cached mapping */
+    BOOL host_cached;
 
     D3DKMT_HANDLE local;
     D3DKMT_HANDLE global;
@@ -469,6 +500,42 @@ static VkResult convert_instance_create_info( struct mempool *pool, VkInstanceCr
     return VK_SUCCESS;
 }
 
+/* With hardware buffer mapping, images, which a BLOB hardware buffer cannot back, get a device-only
+ * twin of each host-visible type. */
+static void init_client_memory_types( struct vulkan_physical_device *physical_device )
+{
+    static const VkMemoryPropertyFlags host_access = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                                     VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    VkPhysicalDeviceMemoryProperties *client = &physical_device->client_memory_properties;
+    const VkPhysicalDeviceMemoryProperties *host = &physical_device->memory_properties;
+    uint32_t i, count = host->memoryTypeCount;
+
+    *client = *host;
+    for (i = 0; i < host->memoryTypeCount; i++)
+    {
+        physical_device->host_memory_type[i] = i;
+        physical_device->device_only_twin[i] = i;
+        if (!physical_device->android_hardware_buffer_map) continue;
+        if (!(host->memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) continue;
+        if (count == VK_MAX_MEMORY_TYPES) break;
+
+        client->memoryTypes[count].propertyFlags = host->memoryTypes[i].propertyFlags & ~host_access;
+        client->memoryTypes[count].heapIndex = host->memoryTypes[i].heapIndex;
+        physical_device->host_memory_type[count] = i;
+        physical_device->device_only_twin[i] = count++;
+    }
+    client->memoryTypeCount = count;
+}
+
+static uint32_t image_memory_type_bits( struct vulkan_physical_device *physical_device, uint32_t host_bits )
+{
+    uint32_t i, bits = 0;
+
+    for (i = 0; i < physical_device->memory_properties.memoryTypeCount; i++)
+        if (host_bits & (1u << i)) bits |= 1u << physical_device->device_only_twin[i];
+    return bits;
+}
+
 static VkResult init_physical_device( struct vulkan_physical_device *physical_device, VkPhysicalDevice host_physical_device,
                                       VkPhysicalDevice client_physical_device, struct vulkan_instance *instance )
 {
@@ -529,6 +596,17 @@ static VkResult init_physical_device( struct vulkan_physical_device *physical_de
         if (physical_device->external_memory_align) WARN( "Not using VK_EXT_external_memory_host for memory mapping\n" );
         else TRACE( "Using VK_EXT_external_memory_host for memory mapping with alignment: %u\n", physical_device->external_memory_align );
     }
+
+#ifdef __ANDROID__
+    if (zero_bits && !physical_device->map_placed_align && !physical_device->external_memory_align &&
+        physical_device->extensions.has_VK_ANDROID_external_memory_android_hardware_buffer &&
+        physical_device->extensions.has_VK_EXT_queue_family_foreign && load_android_hardware_buffer())
+    {
+        physical_device->android_hardware_buffer_map = TRUE;
+        TRACE( "Using Android hardware buffers for memory mapping\n" );
+    }
+#endif
+    init_client_memory_types( physical_device );
 
     driver_funcs->p_map_device_extensions( &extensions );
     if (extensions.has_VK_KHR_external_memory_win32 && zero_bits && !physical_device->map_placed_align)
@@ -715,6 +793,12 @@ static VkResult convert_device_create_info( struct vulkan_physical_device *physi
         device->extensions.has_VK_KHR_external_memory = 1;
         device->extensions.has_VK_EXT_external_memory_host = 1;
     }
+    else if (physical_device->android_hardware_buffer_map)
+    {
+        device->extensions.has_VK_KHR_external_memory = 1;
+        device->extensions.has_VK_EXT_queue_family_foreign = 1;
+        device->extensions.has_VK_ANDROID_external_memory_android_hardware_buffer = 1;
+    }
 
     /* win32u uses VkSwapchainPresentScalingCreateInfoEXT if available. */
     if (device->extensions.has_VK_KHR_swapchain && instance->extensions.has_VK_EXT_surface_maintenance1 &&
@@ -881,6 +965,148 @@ static VkResult import_semaphore_from_d3dkmt_sync( struct vulkan_device *device,
     }
 }
 
+/* The handle type of memory win32u imports for a WoW64 process, which its resources must declare. */
+static VkExternalMemoryHandleTypeFlagBits wow64_import_handle_type( const struct vulkan_physical_device *physical_device )
+{
+    if (physical_device->external_memory_align) return VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    if (physical_device->android_hardware_buffer_map) return VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+    return 0;
+}
+
+#ifdef __ANDROID__
+
+/* The buffer's memory as a dma-buf, received the way another process would get it. */
+static int android_hardware_buffer_fd( AHardwareBuffer *buffer, SIZE_T size )
+{
+    char data[4096], control[CMSG_SPACE( 16 * sizeof(int) )];
+    struct iovec iov = {.iov_base = data, .iov_len = sizeof(data)};
+    struct msghdr msg = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = control, .msg_controllen = sizeof(control)};
+    struct cmsghdr *cmsg;
+    int sockets[2], fd = -1, *fds, count, i;
+
+    if (socketpair( AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets )) return -1;
+    if (!pAHardwareBuffer_sendHandleToUnixSocket( buffer, sockets[0] ) && recvmsg( sockets[1], &msg, MSG_CMSG_CLOEXEC ) > 0)
+    {
+        for (cmsg = CMSG_FIRSTHDR( &msg ); cmsg; cmsg = CMSG_NXTHDR( &msg, cmsg ))
+        {
+            if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) continue;
+            fds = (int *)CMSG_DATA( cmsg );
+            count = (cmsg->cmsg_len - CMSG_LEN( 0 )) / sizeof(int);
+            /* the first descriptor of a gralloc handle holds the pixels */
+            for (i = 0; i < count; i++)
+            {
+                if (fd == -1 && lseek( fds[i], 0, SEEK_END ) >= (off_t)size) fd = fds[i];
+                else close( fds[i] );
+            }
+        }
+    }
+    close( sockets[0] );
+    close( sockets[1] );
+    if (fd != -1) lseek( fd, 0, SEEK_SET );
+    return fd;
+}
+
+/* Without placed maps or host pointer imports, host-visible memory for a WoW64 process is an
+ * AHardwareBuffer whose dma-buf win32u maps below 4GB itself. */
+static VkResult allocate_android_hardware_buffer_memory( struct vulkan_device *device, VkMemoryAllocateInfo *alloc_info,
+                                                         uint32_t mem_flags, VkImportAndroidHardwareBufferInfoANDROID *import_info,
+                                                         void **ret_mapping, AHardwareBuffer **ret_buffer, int *ret_fd )
+{
+    struct vulkan_physical_device *physical_device = device->physical_device;
+    VkAndroidHardwareBufferPropertiesANDROID props = {.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+    AHardwareBuffer_Desc desc =
+    {
+        .width = alloc_info->allocationSize,
+        .height = 1,
+        .layers = 1,
+        .format = AHARDWAREBUFFER_FORMAT_BLOB,
+        .usage = AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER,
+    };
+    uint32_t i;
+    AHardwareBuffer *buffer = NULL;
+    SIZE_T size, free_size = 0;
+    void *mapping = NULL;
+    VkResult res;
+    int fd;
+
+    /* rarely used CPU access maps uncached, which keeps our mapping coherent with the GPU */
+    if (mem_flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+        desc.usage |= AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN;
+    else
+        desc.usage |= AHARDWAREBUFFER_USAGE_CPU_READ_RARELY | AHARDWAREBUFFER_USAGE_CPU_WRITE_RARELY;
+
+    if (pAHardwareBuffer_allocate( &desc, &buffer )) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    if ((res = device->p_vkGetAndroidHardwareBufferPropertiesANDROID( device->host.device, buffer, &props ))) goto failed;
+
+    if (!(props.memoryTypeBits & (1u << alloc_info->memoryTypeIndex)))
+    {
+        for (i = 0; i < physical_device->memory_properties.memoryTypeCount; i++)
+        {
+            if (!(props.memoryTypeBits & (1u << i))) continue;
+            if (!(physical_device->memory_properties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) continue;
+            alloc_info->memoryTypeIndex = i;
+            break;
+        }
+        if (i == physical_device->memory_properties.memoryTypeCount)
+        {
+            FIXME( "No host-visible memory type in %#x can import a hardware buffer\n", props.memoryTypeBits );
+            res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+            goto failed;
+        }
+    }
+
+    size = ROUND_SIZE( props.allocationSize, sysconf( _SC_PAGESIZE ) - 1 );
+    if ((fd = android_hardware_buffer_fd( buffer, props.allocationSize )) == -1)
+    {
+        ERR( "No dma-buf of %#lx bytes in the hardware buffer\n", (unsigned long)props.allocationSize );
+        res = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        goto failed;
+    }
+    if (NtAllocateVirtualMemory( GetCurrentProcess(), &mapping, zero_bits, &size, MEM_COMMIT, PAGE_READWRITE ))
+    {
+        close( fd );
+        res = VK_ERROR_OUT_OF_HOST_MEMORY;
+        goto failed;
+    }
+    if (mmap( mapping, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, 0 ) == MAP_FAILED)
+    {
+        ERR( "Mapping the hardware buffer failed, errno %d\n", errno );
+        close( fd );
+        NtFreeVirtualMemory( GetCurrentProcess(), &mapping, &free_size, MEM_RELEASE );
+        res = VK_ERROR_OUT_OF_HOST_MEMORY;
+        goto failed;
+    }
+
+    import_info->sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+    import_info->pNext = alloc_info->pNext;
+    import_info->buffer = buffer;
+    alloc_info->pNext = import_info;
+    alloc_info->allocationSize = props.allocationSize;
+    *ret_mapping = mapping;
+    *ret_buffer = buffer;
+    *ret_fd = fd;
+    return VK_SUCCESS;
+
+failed:
+    pAHardwareBuffer_release( buffer );
+    return res;
+}
+
+#endif
+
+/* Drops a mapping win32u made itself for a WoW64 process, and the buffer behind it. */
+static void release_low_mapping( void *mapping, struct AHardwareBuffer *hardware_buffer, int dma_buf_fd )
+{
+    SIZE_T size = 0;
+
+    if (!hardware_buffer) return;
+    NtFreeVirtualMemory( GetCurrentProcess(), &mapping, &size, MEM_RELEASE );
+    close( dma_buf_fd );
+#ifdef __ANDROID__
+    pAHardwareBuffer_release( hardware_buffer );
+#endif
+}
+
 static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryAllocateInfo *client_alloc_info,
                                          const VkAllocationCallbacks *allocator, VkDeviceMemory *ret )
 {
@@ -891,6 +1117,11 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
     struct vulkan_physical_device *physical_device = device->physical_device;
     struct vulkan_instance *instance = device->physical_device->instance;
     VkImportMemoryHostPointerInfoEXT host_pointer_info, *pointer_info = NULL;
+#ifdef __ANDROID__
+    VkImportAndroidHardwareBufferInfoANDROID hardware_buffer_info;
+#endif
+    struct AHardwareBuffer *hardware_buffer = NULL;
+    int dma_buf_fd = -1;
     VkExportMemoryWin32HandleInfoKHR export_win32 = {.dwAccess = GENERIC_ALL};
     VkImportMemoryWin32HandleInfoKHR *import_win32 = NULL;
     VkDeviceMemory host_device_memory = VK_NULL_HANDLE;
@@ -938,12 +1169,25 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
     }
 
     /* For host visible memory, we try to use VK_EXT_external_memory_host on wow64 to ensure that mapped pointer is 32-bit. */
-    mem_flags = physical_device->memory_properties.memoryTypes[alloc_info->memoryTypeIndex].propertyFlags;
+    if (alloc_info->memoryTypeIndex >= physical_device->client_memory_properties.memoryTypeCount) return VK_ERROR_UNKNOWN;
+    mem_flags = physical_device->client_memory_properties.memoryTypes[alloc_info->memoryTypeIndex].propertyFlags;
+    alloc_info->memoryTypeIndex = physical_device->host_memory_type[alloc_info->memoryTypeIndex];
     if (physical_device->external_memory_align && (mem_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !pointer_info &&
         (res = allocate_external_host_memory( device, alloc_info, mem_flags, &host_pointer_info )))
         return res;
+#ifdef __ANDROID__
+    if (physical_device->android_hardware_buffer_map && (mem_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+        !pointer_info && !import_win32 && !export_info &&
+        (res = allocate_android_hardware_buffer_memory( device, alloc_info, mem_flags, &hardware_buffer_info,
+                                                        &mapping, &hardware_buffer, &dma_buf_fd )))
+        return res;
+#endif
 
-    if (!(memory = calloc( 1, sizeof(*memory) ))) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (!(memory = calloc( 1, sizeof(*memory) )))
+    {
+        release_low_mapping( mapping, hardware_buffer, dma_buf_fd );
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
 
     if (import_win32)
     {
@@ -1033,6 +1277,9 @@ static VkResult win32u_vkAllocateMemory( VkDevice client_device, const VkMemoryA
     vulkan_object_init( &memory->obj.obj, host_device_memory );
     memory->size = alloc_info->allocationSize;
     memory->vm_map = mapping;
+    memory->hardware_buffer = hardware_buffer;
+    memory->dma_buf_fd = dma_buf_fd;
+    memory->host_cached = !!(mem_flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
     instance->p_insert_object( instance, &memory->obj.obj );
 
     *ret = memory->obj.client.device_memory;
@@ -1046,7 +1293,48 @@ failed:
     d3dkmt_destroy_mutex( memory->mutex );
     d3dkmt_destroy_sync( memory->sync );
     free( memory );
+    release_low_mapping( mapping, hardware_buffer, dma_buf_fd );
     return VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+/* Our cached mapping of a hardware buffer is not the driver's, so its cache maintenance is the
+ * dma-buf's; then the host ranges get the driver's own. */
+static VkResult sync_mapped_memory_ranges( struct vulkan_device *device, uint32_t count, const VkMappedMemoryRange *client_ranges,
+                                           UINT64 dma_buf_flags, PFN_vkFlushMappedMemoryRanges p_vkSyncMappedMemoryRanges )
+{
+    VkMappedMemoryRange *ranges = (VkMappedMemoryRange *)client_ranges; /* cast away const, it has been copied in the thunks */
+    struct dma_buf_sync sync = {.flags = dma_buf_flags};
+    struct device_memory *memory;
+    uint32_t i;
+
+    for (i = 0; i < count; i++)
+    {
+        memory = device_memory_from_handle( ranges[i].memory );
+        if (memory->hardware_buffer && memory->host_cached && ioctl( memory->dma_buf_fd, DMA_BUF_IOCTL_SYNC, &sync ))
+            WARN( "DMA_BUF_IOCTL_SYNC failed, errno %d\n", errno );
+        ranges[i].memory = memory->obj.host.device_memory;
+    }
+    return p_vkSyncMappedMemoryRanges( device->host.device, count, ranges );
+}
+
+static VkResult win32u_vkFlushMappedMemoryRanges( VkDevice client_device, uint32_t count, const VkMappedMemoryRange *ranges )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    TRACE( "device %p, count %u, ranges %p\n", device, count, ranges );
+
+    /* end of CPU access cleans the CPU cache for the GPU */
+    return sync_mapped_memory_ranges( device, count, ranges, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE, device->p_vkFlushMappedMemoryRanges );
+}
+
+static VkResult win32u_vkInvalidateMappedMemoryRanges( VkDevice client_device, uint32_t count, const VkMappedMemoryRange *ranges )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    TRACE( "device %p, count %u, ranges %p\n", device, count, ranges );
+
+    /* start of CPU access drops stale CPU cache lines */
+    return sync_mapped_memory_ranges( device, count, ranges, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ, device->p_vkInvalidateMappedMemoryRanges );
 }
 
 static void win32u_vkFreeMemory( VkDevice client_device, VkDeviceMemory client_memory, const VkAllocationCallbacks *allocator )
@@ -1059,7 +1347,7 @@ static void win32u_vkFreeMemory( VkDevice client_device, VkDeviceMemory client_m
     if (!client_memory) return;
     memory = device_memory_from_handle( client_memory );
 
-    if (memory->vm_map && !physical_device->external_memory_align)
+    if (memory->vm_map && physical_device->map_placed_align)
     {
         const VkMemoryUnmapInfoKHR info =
         {
@@ -1073,7 +1361,8 @@ static void win32u_vkFreeMemory( VkDevice client_device, VkDeviceMemory client_m
     device->p_vkFreeMemory( device->host.device, memory->obj.host.device_memory, NULL );
     instance->p_remove_object( instance, &memory->obj.obj );
 
-    if (memory->vm_map)
+    if (memory->hardware_buffer) release_low_mapping( memory->vm_map, memory->hardware_buffer, memory->dma_buf_fd );
+    else if (memory->vm_map)
     {
         SIZE_T alloc_size = 0;
         NtFreeVirtualMemory( GetCurrentProcess(), &memory->vm_map, &alloc_size, MEM_RELEASE );
@@ -1231,7 +1520,7 @@ static VkResult win32u_vkUnmapMemory2KHR( VkDevice client_device, const VkMemory
     VkMemoryUnmapInfoKHR info;
     VkResult res;
 
-    if (memory->vm_map && physical_device->external_memory_align) return VK_SUCCESS;
+    if (memory->vm_map && !physical_device->map_placed_align) return VK_SUCCESS;
 
     if (!device->p_vkUnmapMemory2KHR)
     {
@@ -1295,11 +1584,11 @@ static VkResult win32u_vkCreateBuffer( VkDevice client_device, const VkBufferCre
         }
     }
 
-    if (physical_device->external_memory_align && !external_info)
+    if (wow64_import_handle_type( physical_device ) && !external_info)
     {
         host_external_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
         host_external_info.pNext = create_info->pNext;
-        host_external_info.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+        host_external_info.handleTypes = wow64_import_handle_type( physical_device );
         ((VkBufferCreateInfo *)create_info)->pNext = &host_external_info; /* cast away const, it has been copied in the thunks */
     }
 
@@ -1418,11 +1707,11 @@ static VkResult win32u_vkCreateImage( VkDevice client_device, const VkImageCreat
     return device->p_vkCreateImage( device->host.device, create_info, NULL, image );
 }
 
-static void win32u_vkGetDeviceImageMemoryRequirements( VkDevice client_device, const VkDeviceImageMemoryRequirements *image_requirements,
-                                                       VkMemoryRequirements2 *memory_requirements )
+static void get_device_image_memory_requirements( struct vulkan_device *device, const VkDeviceImageMemoryRequirements *image_requirements,
+                                                 VkMemoryRequirements2 *memory_requirements,
+                                                 PFN_vkGetDeviceImageMemoryRequirements p_vkGetDeviceImageMemoryRequirements )
 {
     VkBaseOutStructure **next, *prev = (VkBaseOutStructure *)image_requirements->pCreateInfo; /* cast away const, chain has been copied in the thunks */
-    struct vulkan_device *device = vulkan_device_from_handle( client_device );
     VkExternalMemoryImageCreateInfo *external_info;
 
     TRACE( "device %p, image_requirements %p, memory_requirements %p\n", device, image_requirements, memory_requirements );
@@ -1451,7 +1740,76 @@ static void win32u_vkGetDeviceImageMemoryRequirements( VkDevice client_device, c
         }
     }
 
-    device->p_vkGetDeviceImageMemoryRequirements( device->host.device, image_requirements, memory_requirements );
+    p_vkGetDeviceImageMemoryRequirements( device->host.device, image_requirements, memory_requirements );
+    memory_requirements->memoryRequirements.memoryTypeBits =
+        image_memory_type_bits( device->physical_device, memory_requirements->memoryRequirements.memoryTypeBits );
+}
+
+static void win32u_vkGetDeviceImageMemoryRequirements( VkDevice client_device, const VkDeviceImageMemoryRequirements *image_requirements,
+                                                       VkMemoryRequirements2 *memory_requirements )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    get_device_image_memory_requirements( device, image_requirements, memory_requirements, device->p_vkGetDeviceImageMemoryRequirements );
+}
+
+static void win32u_vkGetDeviceImageMemoryRequirementsKHR( VkDevice client_device, const VkDeviceImageMemoryRequirements *image_requirements,
+                                                          VkMemoryRequirements2 *memory_requirements )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    get_device_image_memory_requirements( device, image_requirements, memory_requirements, device->p_vkGetDeviceImageMemoryRequirementsKHR );
+}
+
+static void win32u_vkGetImageMemoryRequirements( VkDevice client_device, VkImage image, VkMemoryRequirements *memory_requirements )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    device->p_vkGetImageMemoryRequirements( device->host.device, image, memory_requirements );
+    memory_requirements->memoryTypeBits = image_memory_type_bits( device->physical_device, memory_requirements->memoryTypeBits );
+}
+
+static void win32u_vkGetImageMemoryRequirements2( VkDevice client_device, const VkImageMemoryRequirementsInfo2 *info,
+                                                  VkMemoryRequirements2 *memory_requirements )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    device->p_vkGetImageMemoryRequirements2( device->host.device, info, memory_requirements );
+    memory_requirements->memoryRequirements.memoryTypeBits =
+        image_memory_type_bits( device->physical_device, memory_requirements->memoryRequirements.memoryTypeBits );
+}
+
+static void win32u_vkGetImageMemoryRequirements2KHR( VkDevice client_device, const VkImageMemoryRequirementsInfo2 *info,
+                                                     VkMemoryRequirements2 *memory_requirements )
+{
+    struct vulkan_device *device = vulkan_device_from_handle( client_device );
+
+    device->p_vkGetImageMemoryRequirements2KHR( device->host.device, info, memory_requirements );
+    memory_requirements->memoryRequirements.memoryTypeBits =
+        image_memory_type_bits( device->physical_device, memory_requirements->memoryRequirements.memoryTypeBits );
+}
+
+static void win32u_vkGetPhysicalDeviceMemoryProperties( VkPhysicalDevice client_physical_device, VkPhysicalDeviceMemoryProperties *properties )
+{
+    struct vulkan_physical_device *physical_device = vulkan_physical_device_from_handle( client_physical_device );
+
+    *properties = physical_device->client_memory_properties;
+}
+
+static void win32u_vkGetPhysicalDeviceMemoryProperties2( VkPhysicalDevice client_physical_device, VkPhysicalDeviceMemoryProperties2 *properties )
+{
+    struct vulkan_physical_device *physical_device = vulkan_physical_device_from_handle( client_physical_device );
+
+    physical_device->instance->p_vkGetPhysicalDeviceMemoryProperties2( physical_device->host.physical_device, properties );
+    properties->memoryProperties = physical_device->client_memory_properties;
+}
+
+static void win32u_vkGetPhysicalDeviceMemoryProperties2KHR( VkPhysicalDevice client_physical_device, VkPhysicalDeviceMemoryProperties2 *properties )
+{
+    struct vulkan_physical_device *physical_device = vulkan_physical_device_from_handle( client_physical_device );
+
+    physical_device->instance->p_vkGetPhysicalDeviceMemoryProperties2KHR( physical_device->host.physical_device, properties );
+    properties->memoryProperties = physical_device->client_memory_properties;
 }
 
 static VkResult get_physical_device_image_format_properties( struct vulkan_physical_device *physical_device, const VkPhysicalDeviceImageFormatInfo2 *format_info,
@@ -2996,13 +3354,18 @@ static struct vulkan_funcs vulkan_funcs =
     .p_vkDestroySemaphore = win32u_vkDestroySemaphore,
     .p_vkDestroySurfaceKHR = win32u_vkDestroySurfaceKHR,
     .p_vkDestroySwapchainKHR = win32u_vkDestroySwapchainKHR,
+    .p_vkFlushMappedMemoryRanges = win32u_vkFlushMappedMemoryRanges,
     .p_vkFreeMemory = win32u_vkFreeMemory,
     .p_vkGetDeviceBufferMemoryRequirements = win32u_vkGetDeviceBufferMemoryRequirements,
     .p_vkGetDeviceBufferMemoryRequirementsKHR = win32u_vkGetDeviceBufferMemoryRequirements,
     .p_vkGetDeviceImageMemoryRequirements = win32u_vkGetDeviceImageMemoryRequirements,
+    .p_vkGetDeviceImageMemoryRequirementsKHR = win32u_vkGetDeviceImageMemoryRequirementsKHR,
     .p_vkGetDeviceQueue = win32u_vkGetDeviceQueue,
     .p_vkGetDeviceQueue2 = win32u_vkGetDeviceQueue2,
     .p_vkGetFenceWin32HandleKHR = win32u_vkGetFenceWin32HandleKHR,
+    .p_vkGetImageMemoryRequirements = win32u_vkGetImageMemoryRequirements,
+    .p_vkGetImageMemoryRequirements2 = win32u_vkGetImageMemoryRequirements2,
+    .p_vkGetImageMemoryRequirements2KHR = win32u_vkGetImageMemoryRequirements2KHR,
     .p_vkGetMemoryWin32HandleKHR = win32u_vkGetMemoryWin32HandleKHR,
     .p_vkGetMemoryWin32HandlePropertiesKHR = win32u_vkGetMemoryWin32HandlePropertiesKHR,
     .p_vkGetPhysicalDeviceExternalBufferProperties = win32u_vkGetPhysicalDeviceExternalBufferProperties,
@@ -3013,6 +3376,9 @@ static struct vulkan_funcs vulkan_funcs =
     .p_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR = win32u_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR,
     .p_vkGetPhysicalDeviceImageFormatProperties2 = win32u_vkGetPhysicalDeviceImageFormatProperties2,
     .p_vkGetPhysicalDeviceImageFormatProperties2KHR = win32u_vkGetPhysicalDeviceImageFormatProperties2KHR,
+    .p_vkGetPhysicalDeviceMemoryProperties = win32u_vkGetPhysicalDeviceMemoryProperties,
+    .p_vkGetPhysicalDeviceMemoryProperties2 = win32u_vkGetPhysicalDeviceMemoryProperties2,
+    .p_vkGetPhysicalDeviceMemoryProperties2KHR = win32u_vkGetPhysicalDeviceMemoryProperties2KHR,
     .p_vkGetPhysicalDevicePresentRectanglesKHR = win32u_vkGetPhysicalDevicePresentRectanglesKHR,
     .p_vkGetPhysicalDeviceProperties = win32u_vkGetPhysicalDeviceProperties,
     .p_vkGetPhysicalDeviceProperties2 = win32u_vkGetPhysicalDeviceProperties2,
@@ -3025,6 +3391,7 @@ static struct vulkan_funcs vulkan_funcs =
     .p_vkGetSemaphoreWin32HandleKHR = win32u_vkGetSemaphoreWin32HandleKHR,
     .p_vkImportFenceWin32HandleKHR = win32u_vkImportFenceWin32HandleKHR,
     .p_vkImportSemaphoreWin32HandleKHR = win32u_vkImportSemaphoreWin32HandleKHR,
+    .p_vkInvalidateMappedMemoryRanges = win32u_vkInvalidateMappedMemoryRanges,
     .p_vkMapMemory = win32u_vkMapMemory,
     .p_vkMapMemory2KHR = win32u_vkMapMemory2KHR,
     .p_vkQueuePresentKHR = win32u_vkQueuePresentKHR,

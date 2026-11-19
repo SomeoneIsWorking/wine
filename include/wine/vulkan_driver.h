@@ -89,7 +89,7 @@ struct VkDevice_T
 #include "wine/list.h"
 
 /* Wine internal vulkan driver version, needs to be bumped upon vulkan_funcs changes. */
-#define WINE_VULKAN_DRIVER_VERSION 48
+#define WINE_VULKAN_DRIVER_VERSION 49
 
 struct vulkan_object
 {
@@ -181,6 +181,11 @@ struct vulkan_physical_device
     VkPhysicalDeviceMemoryProperties memory_properties;
     uint32_t external_memory_align;
     uint32_t map_placed_align;
+    BOOL android_hardware_buffer_map;  /* host-visible memory is an AHardwareBuffer mapped below 4GB */
+    /* the memory types the client sees, and the host type behind each */
+    VkPhysicalDeviceMemoryProperties client_memory_properties;
+    uint32_t host_memory_type[VK_MAX_MEMORY_TYPES];
+    uint32_t device_only_twin[VK_MAX_MEMORY_TYPES];  /* client type images use for each host-visible type */
 };
 
 static inline struct vulkan_physical_device *vulkan_physical_device_from_handle( VkPhysicalDevice handle )
@@ -313,14 +318,19 @@ struct vulkan_funcs
     PFN_vkDestroySemaphore p_vkDestroySemaphore;
     PFN_vkDestroySurfaceKHR p_vkDestroySurfaceKHR;
     PFN_vkDestroySwapchainKHR p_vkDestroySwapchainKHR;
+    PFN_vkFlushMappedMemoryRanges p_vkFlushMappedMemoryRanges;
     PFN_vkFreeMemory p_vkFreeMemory;
     PFN_vkGetDeviceBufferMemoryRequirements p_vkGetDeviceBufferMemoryRequirements;
     PFN_vkGetDeviceBufferMemoryRequirementsKHR p_vkGetDeviceBufferMemoryRequirementsKHR;
     PFN_vkGetDeviceImageMemoryRequirements p_vkGetDeviceImageMemoryRequirements;
+    PFN_vkGetDeviceImageMemoryRequirementsKHR p_vkGetDeviceImageMemoryRequirementsKHR;
     PFN_vkGetDeviceProcAddr p_vkGetDeviceProcAddr;
     PFN_vkGetDeviceQueue p_vkGetDeviceQueue;
     PFN_vkGetDeviceQueue2 p_vkGetDeviceQueue2;
     PFN_vkGetFenceWin32HandleKHR p_vkGetFenceWin32HandleKHR;
+    PFN_vkGetImageMemoryRequirements p_vkGetImageMemoryRequirements;
+    PFN_vkGetImageMemoryRequirements2 p_vkGetImageMemoryRequirements2;
+    PFN_vkGetImageMemoryRequirements2KHR p_vkGetImageMemoryRequirements2KHR;
     PFN_vkGetInstanceProcAddr p_vkGetInstanceProcAddr;
     PFN_vkGetMemoryWin32HandleKHR p_vkGetMemoryWin32HandleKHR;
     PFN_vkGetMemoryWin32HandlePropertiesKHR p_vkGetMemoryWin32HandlePropertiesKHR;
@@ -332,6 +342,9 @@ struct vulkan_funcs
     PFN_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR p_vkGetPhysicalDeviceExternalSemaphorePropertiesKHR;
     PFN_vkGetPhysicalDeviceImageFormatProperties2 p_vkGetPhysicalDeviceImageFormatProperties2;
     PFN_vkGetPhysicalDeviceImageFormatProperties2KHR p_vkGetPhysicalDeviceImageFormatProperties2KHR;
+    PFN_vkGetPhysicalDeviceMemoryProperties p_vkGetPhysicalDeviceMemoryProperties;
+    PFN_vkGetPhysicalDeviceMemoryProperties2 p_vkGetPhysicalDeviceMemoryProperties2;
+    PFN_vkGetPhysicalDeviceMemoryProperties2KHR p_vkGetPhysicalDeviceMemoryProperties2KHR;
     PFN_vkGetPhysicalDevicePresentRectanglesKHR p_vkGetPhysicalDevicePresentRectanglesKHR;
     PFN_vkGetPhysicalDeviceProperties p_vkGetPhysicalDeviceProperties;
     PFN_vkGetPhysicalDeviceProperties2 p_vkGetPhysicalDeviceProperties2;
@@ -344,6 +357,7 @@ struct vulkan_funcs
     PFN_vkGetSemaphoreWin32HandleKHR p_vkGetSemaphoreWin32HandleKHR;
     PFN_vkImportFenceWin32HandleKHR p_vkImportFenceWin32HandleKHR;
     PFN_vkImportSemaphoreWin32HandleKHR p_vkImportSemaphoreWin32HandleKHR;
+    PFN_vkInvalidateMappedMemoryRanges p_vkInvalidateMappedMemoryRanges;
     PFN_vkMapMemory p_vkMapMemory;
     PFN_vkMapMemory2KHR p_vkMapMemory2KHR;
     PFN_vkQueuePresentKHR p_vkQueuePresentKHR;
