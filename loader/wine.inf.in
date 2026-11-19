@@ -35,7 +35,7 @@ AddReg=Wow64
 
 [PreInstall.ntarm64]
 WineFakeDlls=FakeDllsPreInstall
-AddReg=Wow64
+AddReg=Wow64,Wow64Fex
 
 [PreInstall.Services]
 AddService=MountMgr,0x800,MountMgrService
@@ -1158,6 +1158,11 @@ HKLM,%CurrentVersionNT%,"ProductName",2,"Windows 10 Pro"
 HKLM,%Control%\ProductOptions,"ProductType",2,"WinNT"
 HKLM,%Control%\Windows,"CSDVersion",0x10003,0
 HKLM,%Control%\Session Manager\Environment,"OS",2,"Windows_NT"
+
+[Wow64Fex]
+; FEX runs x86 and x86-64 code on ARM64; set before the 32-bit install needs it.
+HKLM,Software\Microsoft\Wow64\amd64,,2,"libarm64ecfex.dll"
+HKLM,Software\Microsoft\Wow64\x86,,2,"libwow64fex.dll"
 
 [Wow64]
 ; Wow6432Node symlinks
