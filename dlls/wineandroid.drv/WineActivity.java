@@ -43,6 +43,8 @@ import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -84,6 +86,12 @@ public class WineActivity extends Activity
         super.onCreate( savedInstanceState );
 
         requestWindowFeature( android.view.Window.FEATURE_NO_TITLE );
+        getWindow().setDecorFitsSystemWindows( false );
+        getWindow().getAttributes().layoutInDisplayCutoutMode =
+            android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        WindowInsetsController insets = getWindow().getDecorView().getWindowInsetsController();
+        insets.hide( WindowInsets.Type.systemBars() );
+        insets.setSystemBarsBehavior( WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE );
 
         new Thread( new Runnable() { public void run() { loadWine( null ); }} ).start();
     }
@@ -175,9 +183,11 @@ public class WineActivity extends Activity
     private final void runWine( String loader, String cmdline, File log )
     {
         CountDownLatch latch = new CountDownLatch(1);
+        // The desktop fills the window; an empty size would give explorer's 800x600 default.
+        android.graphics.Rect bounds = getWindowManager().getCurrentWindowMetrics().getBounds();
         String[] cmd = { loader,
                          "c:\\windows\\system32\\explorer.exe",
-                         "/desktop=shell,,android",
+                         "/desktop=shell," + bounds.width() + "x" + bounds.height() + ",android",
                          cmdline };
 
         runOnUiThread( new Runnable() { public void run() {
