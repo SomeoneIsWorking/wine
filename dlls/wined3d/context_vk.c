@@ -3974,7 +3974,9 @@ VkCommandBuffer wined3d_context_vk_apply_draw_state(struct wined3d_context_vk *c
         context_vk->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_PIXEL);
         context_vk->c.last_was_dual_source_blend = dual_source_blend;
     }
-    if (wined3d_context_is_graphics_state_dirty(&context_vk->c, STATE_SHADER(WINED3D_SHADER_TYPE_VERTEX)))
+    /* SM1-3 vertex shader variants write only the varyings the pixel shader reads. */
+    if (wined3d_context_is_graphics_state_dirty(&context_vk->c, STATE_SHADER(WINED3D_SHADER_TYPE_PIXEL))
+            || wined3d_context_is_graphics_state_dirty(&context_vk->c, STATE_SHADER(WINED3D_SHADER_TYPE_VERTEX)))
         context_vk->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_VERTEX);
     if (wined3d_context_is_graphics_state_dirty(&context_vk->c, STATE_SHADER(WINED3D_SHADER_TYPE_GEOMETRY)))
         context_vk->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_GEOMETRY);
