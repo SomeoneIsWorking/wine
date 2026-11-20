@@ -2010,17 +2010,6 @@ static void vkd3d_spirv_build_op_store(struct vkd3d_spirv_builder *builder,
                 pointer_id, object_id, memory_access);
 }
 
-static void vkd3d_spirv_build_op_copy_memory(struct vkd3d_spirv_builder *builder,
-        uint32_t target_id, uint32_t source_id, uint32_t memory_access)
-{
-    if (!memory_access)
-        return vkd3d_spirv_build_op2(&builder->function_stream, SpvOpCopyMemory,
-                target_id, source_id);
-    else
-        return vkd3d_spirv_build_op3(&builder->function_stream, SpvOpCopyMemory,
-                target_id, source_id, memory_access);
-}
-
 static uint32_t vkd3d_spirv_build_op_select(struct vkd3d_spirv_builder *builder,
         uint32_t result_type, uint32_t condition_id, uint32_t object0_id, uint32_t object1_id)
 {
@@ -4562,7 +4551,7 @@ static uint32_t spirv_compiler_emit_load_scalar(struct spirv_compiler *compiler,
         uint32_t swizzle, uint32_t write_mask, const struct vkd3d_shader_register_info *reg_info)
 {
     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
-    uint32_t type_id, ptr_type_id, index, reg_id, val_id;
+    uint32_t type_id, vector_type_id, val_id;
     unsigned int component_idx, reg_component_count;
     uint32_t skipped_component_mask;
 
@@ -4584,15 +4573,18 @@ static uint32_t spirv_compiler_emit_load_scalar(struct spirv_compiler *compiler,
     }
 
     type_id = spirv_get_type_id(compiler, reg_info->data_type, 1);
-    reg_id = reg_info->id;
     if (reg_component_count != 1)
     {
-        ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, reg_info->storage_class, type_id);
-        index = spirv_compiler_get_constant_uint(compiler, component_idx);
-        reg_id = vkd3d_spirv_build_op_in_bounds_access_chain1(builder, ptr_type_id, reg_id, index);
+        /* Huawei's Maleoon compiler drops the outer index of an access chain
+         * taken on a uniform array element's access chain. */
+        vector_type_id = spirv_get_type_id(compiler, reg_info->data_type, reg_component_count);
+        val_id = vkd3d_spirv_build_op_load(builder, vector_type_id, reg_info->id, SpvMemoryAccessMaskNone);
+        val_id = vkd3d_spirv_build_op_composite_extract1(builder, type_id, val_id, component_idx);
     }
-
-    val_id = vkd3d_spirv_build_op_load(builder, type_id, reg_id, SpvMemoryAccessMaskNone);
+    else
+    {
+        val_id = vkd3d_spirv_build_op_load(builder, type_id, reg_info->id, SpvMemoryAccessMaskNone);
+    }
     if (reg->data_type == reg_info->data_type)
         return val_id;
 
@@ -7563,7 +7555,11 @@ static void spirv_compiler_emit_mov(struct spirv_compiler *compiler,
         dst_id = spirv_compiler_get_register_id(compiler, &dst->reg);
         src_id = spirv_compiler_get_register_id(compiler, &src->reg);
 
-        vkd3d_spirv_build_op_copy_memory(builder, dst_id, src_id, SpvMemoryAccessMaskNone);
+        /* Huawei's Maleoon compiler aborts on OpCopyMemory from an Input. */
+        type_id = spirv_get_type_id(compiler, dst_reg_info.data_type,
+                vsir_write_mask_component_count(dst_reg_info.write_mask));
+        val_id = vkd3d_spirv_build_op_load(builder, type_id, src_id, SpvMemoryAccessMaskNone);
+        vkd3d_spirv_build_op_store(builder, dst_id, val_id, SpvMemoryAccessMaskNone);
         return;
     }
 
