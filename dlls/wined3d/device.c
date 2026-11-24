@@ -5077,6 +5077,76 @@ static void update_swapchain_flags(struct wined3d_texture *texture)
         texture->flags &= ~WINED3D_TEXTURE_GET_DC;
 }
 
+/* The views own Vulkan image views of their textures' images, so they are created against a live context. */
+static HRESULT device_create_implicit_views(struct wined3d_device *device, struct wined3d_swapchain *swapchain)
+{
+    const struct wined3d_swapchain_desc *desc = &swapchain->state.desc;
+    struct wined3d_view_desc view_desc;
+    HRESULT hr;
+
+    if (desc->enable_auto_depth_stencil)
+    {
+        struct wined3d_resource_desc texture_desc;
+        struct wined3d_texture *texture;
+
+        TRACE("Creating the depth stencil buffer.\n");
+
+        texture_desc.resource_type = WINED3D_RTYPE_TEXTURE_2D;
+        texture_desc.format = desc->auto_depth_stencil_format;
+        texture_desc.multisample_type = desc->multisample_type;
+        texture_desc.multisample_quality = desc->multisample_quality;
+        texture_desc.usage = 0;
+        texture_desc.bind_flags = WINED3D_BIND_DEPTH_STENCIL;
+        texture_desc.access = WINED3D_RESOURCE_ACCESS_GPU;
+        texture_desc.width = desc->backbuffer_width;
+        texture_desc.height = desc->backbuffer_height;
+        texture_desc.depth = 1;
+        texture_desc.size = 0;
+
+        if (FAILED(hr = wined3d_texture_create(device, &texture_desc, 1, 1, 0,
+                NULL, NULL, &wined3d_null_parent_ops, &texture)))
+        {
+            ERR("Failed to create the auto depth/stencil surface, hr %#lx.\n", hr);
+            return WINED3DERR_INVALIDCALL;
+        }
+
+        view_desc.format_id = texture->resource.format->id;
+        view_desc.flags = 0;
+        view_desc.u.texture.level_idx = 0;
+        view_desc.u.texture.level_count = 1;
+        view_desc.u.texture.layer_idx = 0;
+        view_desc.u.texture.layer_count = 1;
+        hr = wined3d_rendertarget_view_create(&view_desc, &texture->resource,
+                NULL, &wined3d_null_parent_ops, &device->auto_depth_stencil_view);
+        wined3d_texture_decref(texture);
+        if (FAILED(hr))
+        {
+            ERR("Failed to create rendertarget view, hr %#lx.\n", hr);
+            return hr;
+        }
+    }
+
+    if (desc->backbuffer_count && desc->backbuffer_bind_flags & WINED3D_BIND_RENDER_TARGET)
+    {
+        struct wined3d_resource *back_buffer = &swapchain->back_buffers[0]->resource;
+
+        view_desc.format_id = back_buffer->format->id;
+        view_desc.flags = 0;
+        view_desc.u.texture.level_idx = 0;
+        view_desc.u.texture.level_count = 1;
+        view_desc.u.texture.layer_idx = 0;
+        view_desc.u.texture.layer_count = 1;
+        if (FAILED(hr = wined3d_rendertarget_view_create(&view_desc, back_buffer,
+                NULL, &wined3d_null_parent_ops, &device->back_buffer_view)))
+        {
+            ERR("Failed to create rendertarget view, hr %#lx.\n", hr);
+            return hr;
+        }
+    }
+
+    return WINED3D_OK;
+}
+
 HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
         const struct wined3d_swapchain_desc *swapchain_desc, const struct wined3d_display_mode *mode,
         wined3d_device_reset_cb callback, BOOL reset_state)
@@ -5091,7 +5161,6 @@ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
     struct wined3d_resource *resource, *cursor;
     struct wined3d_rendertarget_view *view;
     struct wined3d_swapchain *swapchain;
-    struct wined3d_view_desc view_desc;
     HRESULT hr = WINED3D_OK;
     HWND device_window;
     unsigned int i;
@@ -5263,71 +5332,11 @@ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
         device->auto_depth_stencil_view = NULL;
         wined3d_rendertarget_view_decref(view);
     }
-    if (current_desc->enable_auto_depth_stencil)
-    {
-        struct wined3d_resource_desc texture_desc;
-        struct wined3d_texture *texture;
-
-        TRACE("Creating the depth stencil buffer.\n");
-
-        texture_desc.resource_type = WINED3D_RTYPE_TEXTURE_2D;
-        texture_desc.format = current_desc->auto_depth_stencil_format;
-        texture_desc.multisample_type = current_desc->multisample_type;
-        texture_desc.multisample_quality = current_desc->multisample_quality;
-        texture_desc.usage = 0;
-        texture_desc.bind_flags = WINED3D_BIND_DEPTH_STENCIL;
-        texture_desc.access = WINED3D_RESOURCE_ACCESS_GPU;
-        texture_desc.width = current_desc->backbuffer_width;
-        texture_desc.height = current_desc->backbuffer_height;
-        texture_desc.depth = 1;
-        texture_desc.size = 0;
-
-        if (FAILED(hr = wined3d_texture_create(device, &texture_desc, 1, 1, 0,
-                NULL, NULL, &wined3d_null_parent_ops, &texture)))
-        {
-            ERR("Failed to create the auto depth/stencil surface, hr %#lx.\n", hr);
-            return WINED3DERR_INVALIDCALL;
-        }
-
-        view_desc.format_id = texture->resource.format->id;
-        view_desc.flags = 0;
-        view_desc.u.texture.level_idx = 0;
-        view_desc.u.texture.level_count = 1;
-        view_desc.u.texture.layer_idx = 0;
-        view_desc.u.texture.layer_count = 1;
-        hr = wined3d_rendertarget_view_create(&view_desc, &texture->resource,
-                NULL, &wined3d_null_parent_ops, &device->auto_depth_stencil_view);
-        wined3d_texture_decref(texture);
-        if (FAILED(hr))
-        {
-            ERR("Failed to create rendertarget view, hr %#lx.\n", hr);
-            return hr;
-        }
-    }
-
     if ((view = device->back_buffer_view))
     {
         device->back_buffer_view = NULL;
         wined3d_rendertarget_view_decref(view);
     }
-    if (current_desc->backbuffer_count && current_desc->backbuffer_bind_flags & WINED3D_BIND_RENDER_TARGET)
-    {
-        struct wined3d_resource *back_buffer = &swapchain->back_buffers[0]->resource;
-
-        view_desc.format_id = back_buffer->format->id;
-        view_desc.flags = 0;
-        view_desc.u.texture.level_idx = 0;
-        view_desc.u.texture.level_count = 1;
-        view_desc.u.texture.layer_idx = 0;
-        view_desc.u.texture.layer_count = 1;
-        if (FAILED(hr = wined3d_rendertarget_view_create(&view_desc, back_buffer,
-                NULL, &wined3d_null_parent_ops, &device->back_buffer_view)))
-        {
-            ERR("Failed to create rendertarget view, hr %#lx.\n", hr);
-            return hr;
-        }
-    }
-
     wine_rb_destroy(&device->samplers, device_free_sampler, NULL);
     wine_rb_destroy(&device->rasterizer_states, device_free_rasterizer_state, NULL);
     wine_rb_destroy(&device->blend_states, device_free_blend_state, NULL);
@@ -5354,14 +5363,18 @@ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
 
         wined3d_state_reset(state, &device->adapter->d3d_info);
 
+        if (FAILED(hr = device->adapter->adapter_ops->adapter_init_3d(device)))
+            return hr;
+        if (FAILED(hr = device_create_implicit_views(device, swapchain)))
+            return hr;
         device_init_swapchain_state(device, swapchain);
         if (wined3d_settings.logo)
             device_load_logo(device, wined3d_settings.logo);
-
-        hr = device->adapter->adapter_ops->adapter_init_3d(device);
     }
     else
     {
+        if (FAILED(hr = device_create_implicit_views(device, swapchain)))
+            return hr;
         if ((view = device->back_buffer_view))
             wined3d_device_context_set_rendertarget_views(context, 0, 1, &view, FALSE);
         if ((view = device->auto_depth_stencil_view))
