@@ -1112,6 +1112,10 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
     VkImageLayout vk_layout;
     uint32_t image_idx;
     RECT dst_rect_tmp;
+    struct wined3d_image_vk resolved;
+    VkImageCreateInfo resolved_desc;
+    VkImageResolve resolve;
+    VkImage src_vk_image;
     VkImageBlit blit;
     VkFilter filter;
     VkResult vr;
@@ -1163,6 +1167,51 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
             back_buffer_vk->layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             back_buffer_vk->image.vk_image, &vk_range);
 
+    src_vk_image = back_buffer_vk->image.vk_image;
+    /* vkCmdBlitImage() takes single-sampled sources only. */
+    if (wined3d_resource_get_sample_count(&back_buffer_vk->t.resource) > 1)
+    {
+        wined3d_init_vk_image_info(&resolved_desc, VK_IMAGE_TYPE_2D,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                wined3d_format_vk(back_buffer_vk->t.resource.format)->vk_format,
+                back_buffer_vk->t.resource.width, back_buffer_vk->t.resource.height, 1);
+        if (!wined3d_context_vk_create_image(context_vk, &resolved_desc, &resolved))
+        {
+            ERR("Failed to create the resolve image.\n");
+            return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        }
+
+        wined3d_context_vk_image_barrier(context_vk, vk_command_buffer,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                resolved.vk_image, &vk_range);
+
+        resolve.srcSubresource.aspectMask = vk_range.aspectMask;
+        resolve.srcSubresource.mipLevel = 0;
+        resolve.srcSubresource.baseArrayLayer = 0;
+        resolve.srcSubresource.layerCount = 1;
+        resolve.srcOffset.x = 0;
+        resolve.srcOffset.y = 0;
+        resolve.srcOffset.z = 0;
+        resolve.dstSubresource = resolve.srcSubresource;
+        resolve.dstOffset = resolve.srcOffset;
+        resolve.extent = resolved_desc.extent;
+        VK_CALL(vkCmdResolveImage(vk_command_buffer,
+                back_buffer_vk->image.vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                resolved.vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &resolve));
+
+        wined3d_context_vk_image_barrier(context_vk, vk_command_buffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                resolved.vk_image, &vk_range);
+
+        src_vk_image = resolved.vk_image;
+        wined3d_context_vk_reference_image(context_vk, &resolved);
+        wined3d_context_vk_destroy_image(context_vk, &resolved);
+    }
+
     wined3d_context_vk_image_barrier(context_vk, vk_command_buffer,
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
             0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -1187,7 +1236,7 @@ static VkResult wined3d_swapchain_vk_blit(struct wined3d_swapchain_vk *swapchain
     blit.dstOffsets[1].y = dst_rect->bottom;
     blit.dstOffsets[1].z = 1;
     VK_CALL(vkCmdBlitImage(vk_command_buffer,
-            back_buffer_vk->image.vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            src_vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             swapchain_vk->vk_images[image_idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1, &blit, filter));
 
