@@ -158,6 +158,9 @@ public class WineActivity extends Activity
                          (new File( share, "gecko" ).exists() ? "" : "mshtml,");
         if (!missing.isEmpty()) putenv( "WINEDLLOVERRIDES", missing.substring( 0, missing.length() - 1 ) + "=" );
         putenv( "LANG", locale );
+        // Emulates the Vulkan features DXVK needs that the GPU's driver lacks.
+        File layer = new File( libdir, "libVkLayer_malibridge_compat.so" );
+        if (layer.exists()) putenv( "WINE_VULKAN_LAYER", layer.toString() );
 
         if (cmdline == null)
         {
