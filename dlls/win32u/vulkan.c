@@ -3517,6 +3517,7 @@ static void vulkan_init_once(void)
     LOAD_FUNCPTR( vkGetInstanceProcAddr );
 #undef LOAD_FUNCPTR
 
+    vulkan_layer_chain( &p_vkGetInstanceProcAddr, &p_vkGetDeviceProcAddr );
     driver_funcs = &lazydrv_funcs;
     vulkan_funcs.p_vkGetInstanceProcAddr = p_vkGetInstanceProcAddr;
     vulkan_funcs.p_vkGetDeviceProcAddr = p_vkGetDeviceProcAddr;

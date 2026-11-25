@@ -54,5 +54,6 @@ SOURCES = \
 	systray.c \
 	vertical.c \
 	vulkan.c \
+	vulkan_layer.c \
 	window.c \
 	winstation.c

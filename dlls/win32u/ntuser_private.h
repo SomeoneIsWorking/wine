@@ -221,6 +221,9 @@ extern void release_opengl_drawables( struct list *drawables );
 /* vulkan.c */
 extern struct vulkan_instance *vulkan_instance_create( const struct vulkan_instance_extensions *extensions );
 
+/* vulkan_layer.c */
+extern void vulkan_layer_chain( PFN_vkGetInstanceProcAddr *gipa, PFN_vkGetDeviceProcAddr *gdpa );
+
 /* window.c */
 HANDLE alloc_user_handle( void *ptr, unsigned short type );
 void *free_user_handle( HANDLE handle, unsigned short type );
